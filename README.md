@@ -320,6 +320,7 @@ docker-compose down -v
 
 Additional documentation is available in the `docs/` folder:
 
+- **[Why ADK-NPL?](docs/MOTIVATION.md)** - Motivation and use cases for the integration
 - [Agent Architecture](docs/AGENTS.md) - Detailed agent design and hybrid tool architecture
 - [A2A Communication](docs/A2A_COMMUNICATION.md) - Agent-to-agent interaction patterns
 - [ADK Monitoring](docs/MONITORING.md) - Web UI, CLI, and API monitoring tools
