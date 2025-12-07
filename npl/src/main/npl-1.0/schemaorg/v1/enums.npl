@@ -1,0 +1,59 @@
+package schemaorg.v1
+
+/**
+ * OrderStatus - Based on schema.org/OrderStatus
+ */
+enum OrderStatus {
+    OrderProblem,
+    OrderProcessing,
+    OrderPaymentDue,
+    OrderInTransit,
+    OrderDelivered,
+    OrderPickupAvailable,
+    OrderCancelled
+}
+
+/**
+ * ItemCondition - Based on schema.org/OfferItemCondition
+ */
+enum ItemCondition {
+    NewCondition,
+    UsedCondition,
+    RefurbishedCondition,
+    DamagedCondition
+}
+
+/**
+ * PaymentMethod - Based on schema.org/PaymentMethod
+ */
+enum PaymentMethod {
+    Cash,
+    CreditCard,
+    Invoice,
+    PayPal,
+    BankTransfer,
+    Cryptocurrency
+}
+
+/**
+ * OfferStatus - Based on schema.org offer-related properties
+ */
+enum OfferStatus {
+    Draft,
+    Published,
+    Accepted,
+    Expired,
+    Withdrawn,
+    Rejected
+}
+
+/**
+ * ProductStatus - Product availability status
+ */
+enum ProductStatus {
+    InStock,
+    OutOfStock,
+    Discontinued,
+    PreOrder
+}
+

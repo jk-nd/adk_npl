@@ -1,0 +1,90 @@
+package commerce
+
+use schemaorg.v1.ItemCondition;
+use schemaorg.v1.ProductStatus;
+
+/**
+ * Product - Based on schema.org/Product
+ * 
+ * A product offered for sale.
+ * 
+ * Reference: https://schema.org/Product
+ * 
+ * Example Usage:
+ *   Product(
+ *       name = "Premium Widget",
+ *       description = "High-quality industrial widget",
+ *       sku = "WDG-001",
+ *       gtin = optionalOf("01234567890123"),
+ *       brand = optionalOf("WidgetCorp"),
+ *       category = "Industrial Supplies",
+ *       itemCondition = ItemCondition.NewCondition
+ *   )
+ */
+@api
+protocol[seller] Product(
+    var name: Text,                         // schema.org/name
+    var description: Text,                  // schema.org/description
+    var sku: Text,                          // schema.org/sku (Stock Keeping Unit)
+    var gtin: Optional<Text>,               // schema.org/gtin (Global Trade Item Number)
+    var brand: Optional<Text>,              // schema.org/brand
+    var category: Text,                     // schema.org/category
+    var itemCondition: ItemCondition        // schema.org/itemCondition
+) {
+    require(name.length() > 0, "Product name is required");
+    require(sku.length() > 0, "SKU is required");
+    require(description.length() > 0, "Product description is required");
+    
+    // Initialize observers with seller
+    init {
+        this.observers = mapOf(Pair("seller_party", seller));
+    };
+    
+    // States map to ProductStatus enum
+    initial state active;       // Product is available
+    state discontinued;         // Product is no longer available
+    
+    // Internal tracking
+    var updatedAt: DateTime = now();
+    var status: ProductStatus = ProductStatus.InStock;
+    
+    /**
+     * Update product description
+     */
+    @api
+    permission[seller] updateDescription(newDescription: Text) {
+        require(newDescription.length() > 0, "Description cannot be empty");
+        description = newDescription;
+        updatedAt = now();
+    }
+    
+    /**
+     * Update product availability status
+     */
+    @api
+    permission[seller] updateStatus(newStatus: ProductStatus) {
+        status = newStatus;
+        updatedAt = now();
+    }
+    
+    /**
+     * Discontinue this product
+     */
+    @api
+    permission[seller] discontinue() | active {
+        status = ProductStatus.Discontinued;
+        updatedAt = now();
+        become discontinued;
+    }
+    
+    /**
+     * Reactivate a discontinued product
+     */
+    @api
+    permission[seller] reactivate() | discontinued {
+        status = ProductStatus.InStock;
+        updatedAt = now();
+        become active;
+    }
+}
+

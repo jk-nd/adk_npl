@@ -1,0 +1,135 @@
+volumes:
+  keycloak-db: { }
+  keycloak-provisioning: { }
+
+services:
+
+  engine:
+    image: ghcr.io/noumenadigital/images/engine:2025.2.1
+    ports:
+      - "12000:12000"
+    volumes:
+      - ./npl/src/main/yaml:/npl/yaml:ro
+      - ./npl/src/main/npl-1.0:/npl/npl-1.0:ro
+    environment:
+      ENGINE_DEV_MODE: ${DEV_MODE:-false}
+      # Trust both purchasing and supplier realms for federated identity
+      ENGINE_ALLOWED_ISSUERS: >-
+        http://keycloak:11000/realms/purchasing,
+        http://keycloak:11000/realms/supplier
+      ENGINE_DB_URL: "jdbc:postgresql://engine-db:5432/engine"
+      ENGINE_DB_USER: engine
+      ENGINE_DB_PASSWORD: secret
+      ENGINE_DB_HISTORY_USER: history
+      ENGINE_DB_HISTORY_SCHEMA: history
+      ENGINE_DB_READ_MODEL_USER: postgraphile
+      # Removed ENGINE_ISSUER_OVERRIDE to allow token issuer-based routing
+      ENGINE_NPL_MIGRATION_DIRECTORY_PATH: /npl
+      SWAGGER_ENGINE_URL: http://localhost:12000
+      # Swagger UI defaults to purchasing realm (can be changed in UI)
+      SWAGGER_SECURITY_AUTH_URL: http://localhost:11000/realms/purchasing
+      SWAGGER_SECURITY_CLIENT_ID: purchasing
+    depends_on:
+      engine-db:
+        condition: service_started
+      keycloak:
+        condition: service_healthy
+    healthcheck:
+      test: curl -f http://localhost:12000/actuator/health || exit 1
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  engine-db:
+    image: postgres:14.4-alpine
+    mem_limit: 256m
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: engine
+      ENGINE_DB_USER: engine
+      ENGINE_DB_PASSWORD: secret
+      HISTORY_DB_USER: history
+      HISTORY_DB_PASSWORD: secret
+      HISTORY_DB_SCHEMA: history
+      READ_MODEL_DB_USER: postgraphile
+      READ_MODEL_DB_PASSWORD: secret
+    volumes:
+      - ./db_init/db_init.sh:/docker-entrypoint-initdb.d/db_init.sh
+    healthcheck:
+      test: pg_isready -U postgres
+      interval: 1s
+      timeout: 5s
+      retries: 50
+
+  keycloak-provisioning:
+    build:
+      context: keycloak-provisioning
+    command: /local.sh
+    volumes:
+      - keycloak-provisioning:/state
+    env_file:
+      - .env
+    environment:
+      KEYCLOAK_USER: ${KEYCLOAK_ADMIN:-admin}
+      KEYCLOAK_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:-welcome}
+      KEYCLOAK_URL: http://keycloak:11000
+      TF_VAR_default_password: ${SEED_TEST_USERS_PASSWORD:-Welcome123}
+      TF_VAR_systemuser_secret: super-secret-system-security-safe
+      TF_VAR_app_name: ${VITE_NC_KC_REALM:-poc}
+    depends_on:
+      keycloak:
+        condition: service_healthy
+
+  keycloak:
+    image: ghcr.io/noumenadigital/packages/keycloak:latest
+    command: |
+      start
+      --spi-events-listener-jboss-logging-success-level=info
+      --spi-events-listener-jboss-logging-error-level=error
+      --hostname-strict=false
+      --health-enabled=true
+      --http-enabled=true
+      --metrics-enabled=true
+      --db=postgres
+      --hostname-admin=http://keycloak:11000
+      --hostname=http://keycloak:11000
+    ports:
+      - "11000:11000"
+      - "9000:9000"
+    environment:
+      KEYCLOAK_ADMIN: ${KEYCLOAK_ADMIN:-admin}
+      KEYCLOAK_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:-welcome}
+      KC_DB_URL: jdbc:postgresql://keycloak-db/postgres
+      KC_DB_USERNAME: postgres
+      KC_DB_PASSWORD: testing
+      KC_HEALTH_ENABLED: "true"
+      KC_HTTP_ENABLED: "true"
+      KC_HTTP_PORT: 11000
+      KC_HOSTNAME: keycloak
+    depends_on:
+      keycloak-db:
+        condition: service_started
+    healthcheck:
+      test: curl http://keycloak:9000/health || exit 1
+      interval: 1s
+      retries: 60
+
+  keycloak-db:
+    image: postgres:14.4-alpine
+    mem_limit: 256m
+    ports:
+      - "5439:5432"
+    volumes:
+      - keycloak-db:/var/lib/postgresql/data
+    environment:
+      POSTGRES_PASSWORD: testing
+      ENV: DOCKER
+    healthcheck:
+      test: pg_isready -U postgres
+      interval: 1s
+      timeout: 5s
+      retries: 50
+

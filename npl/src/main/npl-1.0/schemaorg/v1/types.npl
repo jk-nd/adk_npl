@@ -1,0 +1,67 @@
+package schemaorg.v1
+
+/**
+ * QuantitativeValue - Based on schema.org/QuantitativeValue
+ */
+struct QuantitativeValue {
+    value: Number,
+    unitCode: Text,
+    unitText: Text
+}
+
+/**
+ * PriceSpecification - Based on schema.org/PriceSpecification
+ * 
+ * A structured value representing a price or price range.
+ */
+struct PriceSpecification {
+    price: Number,
+    priceCurrency: Text,
+    validFrom: Optional<DateTime>,
+    validThrough: Optional<DateTime>
+}
+
+/**
+ * MonetaryAmount - Based on schema.org/MonetaryAmount
+ * 
+ * A monetary value or range with currency.
+ */
+struct MonetaryAmount {
+    value: Number,
+    currency: Text
+}
+
+/**
+ * PostalAddress - Based on schema.org/PostalAddress
+ * 
+ * The mailing address.
+ */
+struct PostalAddress {
+    streetAddress: Text,
+    addressLocality: Text,
+    addressRegion: Text,
+    postalCode: Text,
+    addressCountry: Text
+}
+
+/**
+ * ContactPoint - Based on schema.org/ContactPoint
+ * 
+ * A contact point for a person or organization.
+ */
+struct ContactPoint {
+    contactType: Text,
+    telephone: Text,
+    email: Optional<Text>
+}
+
+/**
+ * DeliveryTimeSettings - Based on schema.org delivery-related properties
+ * 
+ * Information about delivery timing.
+ */
+struct DeliveryTimeSettings {
+    deliveryLeadTime: Number,
+    cutoffTime: Optional<Text>
+}
+

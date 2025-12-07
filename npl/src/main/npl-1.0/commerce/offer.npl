@@ -1,0 +1,144 @@
+package commerce
+
+use schemaorg.v1.PriceSpecification;
+use schemaorg.v1.QuantitativeValue;
+use schemaorg.v1.OfferStatus;
+use commerce.Product;
+
+/**
+ * Offer - Based on schema.org/Offer
+ * 
+ * An offer to transfer some rights to an item or to provide a service.
+ * 
+ * Reference: https://schema.org/Offer
+ * 
+ * Example Usage:
+ *   Offer(
+ *       offeredBy = sellerParty,
+ *       itemOffered = productProtocol,
+ *       priceSpecification = PriceSpecification(...),
+ *       availableQuantity = QuantitativeValue(value = 1000.0, unitCode = "EA", unitText = "pieces"),
+ *       deliveryLeadTime = 14,
+ *       validFrom = now(),
+ *       validThrough = now() + days(30)
+ *   )
+ */
+@api
+protocol[seller, buyer] Offer(
+    var itemOffered: Product,                   // schema.org/itemOffered (product reference)
+    var priceSpecification: PriceSpecification, // schema.org/priceSpecification
+    var availableQuantity: QuantitativeValue,   // schema.org/inventoryLevel
+    var deliveryLeadTime: Number,               // schema.org/deliveryLeadTime (in days)
+    var validFrom: DateTime,                    // schema.org/validFrom
+    var validThrough: DateTime                  // schema.org/validThrough
+) {
+    require(availableQuantity.value > 0, "Available quantity must be positive");
+    require(priceSpecification.price > 0, "Price must be positive");
+    require(deliveryLeadTime > 0, "Delivery lead time must be positive");
+    require(validThrough.isAfter(validFrom, false), "Validity period must be positive");
+    
+    // Initialize observers with both seller and buyer (both are protocol parties)
+    init {
+        this.observers = mapOf(
+            Pair("seller_party", seller),
+            Pair("buyer_party", buyer)
+        );
+    };
+    
+    // States based on OfferStatus enum
+    initial state draft;        // Offer being prepared
+    state published;            // Offer is active
+    final state accepted;       // Buyer accepted
+    final state expired;        // Validity period passed
+    final state withdrawn;      // Seller withdrew
+    final state rejected;       // Buyer rejected
+    
+    // Internal tracking
+    var updatedAt: DateTime = now();
+    var status: OfferStatus = OfferStatus.Draft;
+    
+    /**
+     * Publish the offer (make it available to buyers)
+     */
+    @api
+    permission[seller] publish() | draft {
+        require(now().isBefore(validThrough, false), "Offer validity period has passed");
+        status = OfferStatus.Published;
+        updatedAt = now();
+        become published;
+    };
+    
+    
+    /**
+     * Accept the offer (buyer accepts)
+     */
+    @api
+    permission[buyer] accept() | published {
+        require(now().isBefore(validThrough, false), "Offer has expired");
+        status = OfferStatus.Accepted;
+        updatedAt = now();
+        become accepted;
+    };
+    
+    /**
+     * Reject the offer (buyer rejects)
+     */
+    @api
+    permission[buyer] reject() | published {
+        status = OfferStatus.Rejected;
+        updatedAt = now();
+        become rejected;
+    }
+    
+    /**
+     * Withdraw the offer (seller withdraws)
+     */
+    @api
+    permission[seller] withdraw() | draft, published {
+        status = OfferStatus.Withdrawn;
+        updatedAt = now();
+        become withdrawn;
+    }
+    
+    /**
+     * Update the price (only in draft state)
+     */
+    @api
+    permission[seller] updatePrice(newPrice: Number) | draft {
+        require(newPrice > 0, "Price must be positive");
+        priceSpecification = PriceSpecification(
+            price = newPrice,
+            priceCurrency = priceSpecification.priceCurrency,
+            validFrom = priceSpecification.validFrom,
+            validThrough = priceSpecification.validThrough
+        );
+        updatedAt = now();
+    }
+    
+    /**
+     * Update available quantity (only in draft state)
+     */
+    @api
+    permission[seller] updateQuantity(newQuantity: Number) | draft {
+        require(newQuantity > 0, "Quantity must be positive");
+        availableQuantity = QuantitativeValue(
+            value = newQuantity,
+            unitCode = availableQuantity.unitCode,
+            unitText = availableQuantity.unitText
+        );
+        updatedAt = now();
+    }
+    
+    /**
+     * Check if offer has expired
+     */
+    @api
+    permission[seller | buyer] checkExpiration() | published {
+        if (now().isAfter(validThrough, false)) {
+            status = OfferStatus.Expired;
+            updatedAt = now();
+            become expired;
+        };
+    };
+}
+

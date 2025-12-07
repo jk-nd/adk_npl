@@ -1,0 +1,14 @@
+# Party Automation Rules for Commerce System
+# Based on schema.org commerce protocols
+#
+# These rules extract party claims from JWT tokens to automatically
+# assign roles in commerce protocols (Product, Offer, Order).
+
+# Product protocol - parties passed explicitly via @parties
+commerce.Product: {}
+
+# Offer protocol - parties passed explicitly via @parties
+commerce.Offer: {}
+
+# Order protocol - parties passed explicitly via @parties
+commerce.Order: {}

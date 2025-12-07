@@ -1,0 +1,144 @@
+package commerce
+
+use schemaorg.v1.OrderStatus;
+use schemaorg.v1.QuantitativeValue;
+use schemaorg.v1.MonetaryAmount;
+use schemaorg.v1.PaymentMethod;
+use commerce.Product;
+use commerce.Offer;
+
+/**
+ * Order - Based on schema.org/Order
+ * 
+ * An order is a confirmation of a transaction (a receipt), which can contain
+ * multiple line items, each represented by an Offer that has been accepted by the customer.
+ * 
+ * Reference: https://schema.org/Order
+ * 
+ * Example Usage:
+ *   Order(
+ *       orderNumber = "ORD-2024-001",
+ *       orderDate = now(),
+ *       acceptedOffer = offerProtocol,
+ *       orderedItem = productProtocol,
+ *       orderQuantity = QuantitativeValue(value = 100.0, unitCode = "EA", unitText = "pieces"),
+ *       price = MonetaryAmount(value = 4500.00, currency = "USD"),
+ *       paymentMethod = PaymentMethod.Invoice
+ *   )
+ */
+@api
+protocol[buyer, sellerRole] Order(
+    var orderNumber: Text,                  // schema.org/orderNumber
+    var orderDate: DateTime,                // schema.org/orderDate
+    var acceptedOffer: Offer,               // schema.org/acceptedOffer (contains orderedItem reference)
+    var orderQuantity: QuantitativeValue,   // schema.org/orderQuantity
+    var price: MonetaryAmount,              // schema.org/price (total)
+    var paymentMethod: PaymentMethod        // schema.org/paymentMethod
+) {
+    require(orderNumber.length() > 0, "Order number is required");
+    require(orderQuantity.value > 0, "Order quantity must be positive");
+    require(price.value > 0, "Price must be positive");
+    
+    // Derive orderedItem from acceptedOffer.itemOffered for schema.org compliance
+    // This avoids requiring buyer to have direct observer access to Product
+    // The orderedItem is accessible through acceptedOffer.itemOffered
+    var orderedItem: Product = acceptedOffer.itemOffered;
+    
+    // Initialize observers
+    init {
+        this.observers = mapOf(
+            Pair("buyer", buyer),
+            Pair("seller", sellerRole)
+        );
+    };
+    
+    // States based on schema.org/OrderStatus
+    initial state OrderProcessing;      // Being processed
+    state OrderPaymentDue;              // Awaiting payment
+    state OrderInTransit;               // Shipped
+    final state OrderDelivered;         // Completed successfully
+    final state OrderCancelled;         // Cancelled
+    
+    // Internal state variables
+    var orderStatus: OrderStatus = OrderStatus.OrderProcessing;
+    var paymentDueDate: Optional<DateTime> = optionalOf<DateTime>();
+    var expectedDeliveryDate: Optional<DateTime> = optionalOf<DateTime>();
+    var actualDeliveryDate: Optional<DateTime> = optionalOf<DateTime>();
+    var trackingNumber: Optional<Text> = optionalOf<Text>();
+    var paymentReceived: Boolean = false;
+    
+    /**
+     * Seller confirms the order and sets expected delivery date
+     */
+    @api
+    permission[sellerRole] confirmOrder(expectedDelivery: DateTime, paymentDue: DateTime) | OrderProcessing {
+        require(expectedDelivery.isAfter(now(), false), "Expected delivery must be in the future");
+        require(paymentDue.isAfter(now(), false), "Payment due date must be in the future");
+        
+        expectedDeliveryDate = optionalOf(expectedDelivery);
+        paymentDueDate = optionalOf(paymentDue);
+        orderStatus = OrderStatus.OrderPaymentDue;
+        become OrderPaymentDue;
+    }
+    
+    /**
+     * Buyer confirms payment has been sent
+     */
+    @api
+    permission[buyer] confirmPayment() | OrderPaymentDue {
+        paymentReceived = true;
+        orderStatus = OrderStatus.OrderInTransit;
+        become OrderInTransit;
+    }
+    
+    /**
+     * Seller marks payment as received (alternative to buyer confirmation)
+     */
+    @api
+    permission[sellerRole] receivePayment() | OrderPaymentDue {
+        paymentReceived = true;
+        orderStatus = OrderStatus.OrderInTransit;
+        become OrderInTransit;
+    }
+    
+    /**
+     * Seller ships the order
+     */
+    @api
+    permission[sellerRole] shipOrder(tracking: Text) | OrderInTransit {
+        require(tracking.length() > 0, "Tracking number is required");
+        trackingNumber = optionalOf(tracking);
+    }
+    
+    /**
+     * Buyer confirms delivery
+     */
+    @api
+    permission[buyer] confirmDelivery() | OrderInTransit {
+        actualDeliveryDate = optionalOf(now());
+        orderStatus = OrderStatus.OrderDelivered;
+        become OrderDelivered;
+    }
+    
+    /**
+     * Cancel the order (both parties can cancel before delivery)
+     */
+    @api
+    permission[buyer | sellerRole] cancelOrder(reason: Text) | OrderProcessing, OrderPaymentDue {
+        require(reason.length() > 0, "Cancellation reason is required");
+        orderStatus = OrderStatus.OrderCancelled;
+        become OrderCancelled;
+    };
+    
+    /**
+     * Get order summary
+     */
+    @api
+    permission[buyer | sellerRole] getOrderSummary() returns Text {
+        return "Order " + orderNumber + 
+               " - Status: " + orderStatus.toText() + 
+               " - Quantity: " + orderQuantity.value.toText() + " " + orderQuantity.unitText +
+               " - Total: " + price.value.toText() + " " + price.currency;
+    };
+}
+
