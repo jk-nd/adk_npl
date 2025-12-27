@@ -1,6 +1,16 @@
-# ADK Demo - Google ADK + Noumena NPL Integration
+# ADK Demo - Governed AI-Driven Supplier Ordering
 
-This project demonstrates the integration of Google's Agent Development Kit (ADK) with Noumena's NPL (Noumena Protocol Language), featuring a federated identity setup with multiple Keycloak realms.
+**Proof of Concept:** AI agents participating in real business workflows with policy enforcement outside the LLM.
+
+This project demonstrates how AI agents can autonomously initiate business transactions while being safely governed by NPL (Noumena Protocol Language), even when the AI is imperfect or unpredictable. The system enforces policies through state machines and role-based authorization, ensuring that **human approval is mandatory for high-value purchases** and all actions are auditable.
+
+## Key Features
+
+- ✅ **Agents Initiate Actions** - LLMs autonomously propose and execute business operations
+- ✅ **Policies Enforced Outside LLM** - NPL state machine blocks invalid transitions
+- ✅ **Human-in-the-Loop** - High-value orders require human approval before execution
+- ✅ **Fully Auditable** - Complete audit trail of all state transitions and approvals
+- ✅ **Safe by Design** - System remains correct even if LLM hallucinates or skips steps
 
 ## Architecture
 
@@ -74,15 +84,30 @@ We have provided a helper script to set up the environment correctly:
 
 Access the UI at http://localhost:8000
 
-### 4. Run Agent Negotiation Simulation
+### 4. Run Approval Workflow Demo
 
-We have provided a script to simulate a negotiation between the Purchasing and Supplier agents:
+The main demo showcases the end-to-end approval workflow for high-value purchases:
 
 ```bash
-python3 simulate_negotiation.py
+python demo_approval_workflow.py
 ```
 
-*Note: This simulation runs multiple LLM requests in sequence. If you are using a free tier Gemini API key, you may hit rate limits (429). The script includes delays to mitigate this.*
+This demonstrates:
+1. Product and Offer creation by supplier
+2. Offer acceptance by buyer
+3. PurchaseOrder creation (high value, triggers approval requirement)
+4. Supplier submits quote
+5. **Buyer agent attempts to place order → BLOCKED by NPL**
+6. Human approver approves the order
+7. Buyer agent retries → SUCCESS
+8. Complete audit trail with all state transitions
+
+**Alternative:** For a basic agent negotiation simulation (without approval workflow):
+```bash
+python simulate_negotiation.py
+```
+
+*Note: These scripts run multiple LLM requests. If using a free tier Gemini API key, you may hit rate limits (429).*
 
 ### 5. Troubleshooting
 
@@ -108,9 +133,10 @@ If you see **ModuleNotFoundError: No module named 'adk_npl'**:
 ### Purchasing Realm
 - **Realm**: `purchasing`
 - **Client**: `purchasing`
-- **User**: `purchasing_agent` / `Welcome123`
+- **Users**:
+  - `purchasing_agent` / `Welcome123` (Acme Corp, Procurement)
+  - `approver` / `Welcome123` (Acme Corp, Finance) - **Required for approval workflow**
 - **Organization**: Acme Corp
-- **Department**: Procurement
 
 ### Supplier Realm
 - **Realm**: `supplier`
@@ -260,17 +286,61 @@ Both agents have:
 - **Multi-Realm Auth**: Supports federated identity with multiple Keycloak realms
 - **Caching**: Efficient caching of discovered packages and tools
 
+## Approval Workflow Demo
+
+The `demo_approval_workflow.py` script demonstrates the complete PoC workflow:
+
+### Flow
+
+1. **Supplier Agent** creates a Product (Industrial Pump)
+2. **Supplier Agent** creates and publishes an Offer
+3. **Buyer Agent** accepts the Offer
+4. **System** creates a PurchaseOrder with high value ($12,000 > $5,000 threshold)
+5. **Supplier Agent** submits a quote → Order transitions to `ApprovalRequired`
+6. **Buyer Agent** attempts to place order → **❌ NPL BLOCKS** with `IllegalProtocolStateRuntimeErrorException`
+7. **Human Approver** (Alice) approves via `approve` action → Order transitions to `Approved`
+8. **Buyer Agent** retries place order → **✅ SUCCESS** → Order transitions to `Ordered`
+9. **Supplier Agent** ships the order
+10. **System** retrieves complete audit trail
+
+### Why This Works
+
+- **LLM suggests**, NPL decides - Agent cannot bypass policy
+- **State machine enforcement** - Invalid transitions are rejected
+- **Role-based authorization** - Only users with `approver` role can approve
+- **Auditability** - Every action is logged with timestamp and actor
+- **Resilience** - Works even if LLM hallucinates or attempts forbidden actions
+
 ## NPL Protocols
 
-The demo uses schema.org-inspired commerce protocols:
+The demo uses schema.org-inspired commerce protocols with an approval workflow:
 
-- `commerce.Product` - Product catalog entries (seller creates)
-- `commerce.Offer` - Price offers with terms (seller creates, buyer accepts)
-- `commerce.Order` - Purchase orders (buyer creates after accepting offer)
+- **`commerce.Product`** - Product catalog entries (seller creates)
+- **`commerce.Offer`** - Price offers with terms (seller creates, buyer accepts)
+- **`commerce.PurchaseOrder`** - Purchase orders with approval workflow (buyer creates after accepting offer)
 
+### PurchaseOrder Approval Workflow
+
+The `PurchaseOrder` protocol implements human-in-the-loop approval for high-value purchases:
+
+**State Machine:**
+```
+Requested → Quoted → ApprovalRequired → Approved → Ordered → Shipped → Closed
+                   ↘ (if < $5000) ↗
+```
+
+**Key Rules:**
+- Orders **≥ $5,000** require approval by a user with `approver` role
+- `placeOrder` action is **blocked** unless:
+  - Quote exists
+  - Approval exists (if required)
+- All state transitions and approvals are **auditable**
+
+**Schema.org Types:**
 Supporting types in `schemaorg/`:
-- `PriceSpecification`, `QuantitativeValue`, `PostalAddress`
-- `OrderStatus`, `ItemCondition`, `OfferStatus` enums
+- `PriceSpecification`, `QuantitativeValue`, `MonetaryAmount`
+- `PostalAddress`, `ContactPoint`, `DeliveryTimeSettings`
+- `OrderStatus`, `ItemCondition`, `OfferStatus`, `ProductStatus` (enums)
 
 ## Development
 
