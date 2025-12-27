@@ -84,7 +84,32 @@ We have provided a helper script to set up the environment correctly:
 
 Access the UI at http://localhost:8000
 
-### 4. Run Approval Workflow Demo
+### 4. Run NPL Approval Dashboard (NPL-Native Frontend)
+
+The approval dashboard provides a human-friendly interface for approving high-value orders, using type-safe clients generated directly from NPL Engine's OpenAPI specifications:
+
+```bash
+cd frontend
+npm install
+npm run dev
+```
+
+Access at http://localhost:5173
+
+**Key Features:**
+- ✅ **Type-safe API clients** - Auto-generated from NPL protocols
+- ✅ **Direct NPL integration** - No backend proxy needed
+- ✅ **Keycloak authentication** - Built-in auth handling
+- ✅ **Always in sync** - Regenerate types when protocols change
+
+**To regenerate types after protocol changes:**
+```bash
+cd frontend
+curl -s http://localhost:12000/npl/commerce/-/openapi.json > openapi/commerce-openapi.json
+npx openapi-typescript openapi/commerce-openapi.json -o ./src/clients/commerce/types.ts
+```
+
+### 5. Run Approval Workflow Demo
 
 The main demo showcases the end-to-end approval workflow for high-value purchases:
 
