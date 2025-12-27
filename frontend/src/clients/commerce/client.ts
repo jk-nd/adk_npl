@@ -8,19 +8,28 @@
 import createClient from 'openapi-fetch';
 import type { paths } from './types';
 
-// Create type-safe client
+// Store the token
+let authToken: string | null = null;
+
+// Create type-safe client with auth middleware
+// Use empty baseUrl to leverage Vite's proxy configuration
 const client = createClient<paths>({
-  baseUrl: import.meta.env.VITE_NPL_ENGINE_URL || 'http://localhost:12000',
+  baseUrl: '',
 });
 
-// Configure authentication interceptor
-export const setAuthToken = (token: string) => {
-  client.use({
-    onRequest({ request }) {
-      request.headers.set('Authorization', `Bearer ${token}`);
-      return request;
-    },
-  });
+// Set up auth middleware that uses the stored token
+client.use({
+  onRequest({ request }) {
+    if (authToken) {
+      request.headers.set('Authorization', `Bearer ${authToken}`);
+    }
+    return request;
+  },
+});
+
+// Configure authentication token
+export const setAuthToken = (token: string | null) => {
+  authToken = token;
 };
 
 export default client;

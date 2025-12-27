@@ -96,10 +96,16 @@ npm run dev
 
 Access at http://localhost:5173
 
+**Note:** On first run, you may need to add a hosts entry so your browser can resolve the `keycloak` hostname:
+```bash
+./setup_hosts.sh
+```
+
 **Key Features:**
 - ✅ **Type-safe API clients** - Auto-generated from NPL protocols
 - ✅ **Direct NPL integration** - No backend proxy needed
-- ✅ **Keycloak authentication** - Built-in auth handling
+- ✅ **Keycloak authentication** - Built-in auth handling with login/logout
+- ✅ **Light/Dark theme toggle** - Modern UI with theme switching
 - ✅ **Always in sync** - Regenerate types when protocols change
 
 **To regenerate types after protocol changes:**
@@ -228,11 +234,19 @@ adk-demo/
 ├── keycloak-provisioning/      # Terraform for Keycloak setup
 │   └── terraform.tf            # Realms, clients, users
 │
+├── frontend/                   # React + TypeScript approval dashboard
+│   ├── src/
+│   │   ├── components/         # ApprovalDashboard component
+│   │   ├── contexts/           # Theme context
+│   │   └── clients/            # Type-safe NPL API clients
+│   └── openapi/                # OpenAPI specs for type generation
+│
 ├── scripts/
 │   ├── setup-fresh.sh          # Complete clean setup
 │   ├── configure-user-profiles.sh  # Keycloak 26+ config
 │   └── wait-for-services.sh    # Health check utilities
 │
+├── setup_hosts.sh              # Helper script for keycloak hostname
 ├── docker-compose.yml          # Service orchestration
 └── .env                        # Environment variables
 ```
