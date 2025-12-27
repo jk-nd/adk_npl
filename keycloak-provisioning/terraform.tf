@@ -6,22 +6,22 @@ variable "default_password" {
 
 variable "login_theme" {
   type    = string
-  default = "taplatform"
+  default = "keycloak"
 }
 
 variable "account_theme" {
   type    = string
-  default = "taplatform"
+  default = "keycloak.v2"
 }
 
 variable "admin_theme" {
   type    = string
-  default = "taplatform"
+  default = "keycloak.v2"
 }
 
 variable "email_theme" {
   type    = string
-  default = "taplatform"
+  default = "keycloak"
 }
 
 variable "root_url" {
@@ -188,7 +188,7 @@ resource "keycloak_realm_user_profile" "purchasing_user_profile" {
   attribute {
     name         = "organization"
     display_name = "Organization"
-    multivalued  = true
+    multi_valued  = true
 
     permissions {
       view = ["admin", "user"]
@@ -200,7 +200,7 @@ resource "keycloak_realm_user_profile" "purchasing_user_profile" {
   attribute {
     name         = "department"
     display_name = "Department"
-    multivalued  = true
+    multi_valued  = true
 
     permissions {
       view = ["admin", "user"]
@@ -237,7 +237,6 @@ resource "keycloak_openid_user_attribute_protocol_mapper" "purchasing_organizati
   claim_name       = "organization"
   claim_value_type = "String"
   multivalued      = true
-  aggregate_attribute_values = true
 
   add_to_id_token     = true
   add_to_access_token = true
@@ -254,7 +253,6 @@ resource "keycloak_openid_user_attribute_protocol_mapper" "purchasing_department
   claim_name       = "department"
   claim_value_type = "String"
   multivalued      = true
-  aggregate_attribute_values = true
 
   add_to_id_token     = true
   add_to_access_token = true
@@ -424,7 +422,7 @@ resource "keycloak_realm_user_profile" "supplier_user_profile" {
   attribute {
     name         = "organization"
     display_name = "Organization"
-    multivalued  = true
+    multi_valued  = true
 
     permissions {
       view = ["admin", "user"]
@@ -436,7 +434,7 @@ resource "keycloak_realm_user_profile" "supplier_user_profile" {
   attribute {
     name         = "department"
     display_name = "Department"
-    multivalued  = true
+    multi_valued  = true
 
     permissions {
       view = ["admin", "user"]
@@ -473,7 +471,6 @@ resource "keycloak_openid_user_attribute_protocol_mapper" "supplier_organization
   claim_name       = "organization"
   claim_value_type = "String"
   multivalued      = true
-  aggregate_attribute_values = true
 
   add_to_id_token     = true
   add_to_access_token = true
@@ -490,7 +487,6 @@ resource "keycloak_openid_user_attribute_protocol_mapper" "supplier_department_m
   claim_name       = "department"
   claim_value_type = "String"
   multivalued      = true
-  aggregate_attribute_values = true
 
   add_to_id_token     = true
   add_to_access_token = true

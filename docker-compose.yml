@@ -5,7 +5,7 @@ volumes:
 services:
 
   engine:
-    image: ghcr.io/noumenadigital/images/engine:2025.2.1
+    image: ghcr.io/noumenadigital/images/engine:latest
     ports:
       - "12000:12000"
     volumes:
@@ -84,9 +84,9 @@ services:
         condition: service_healthy
 
   keycloak:
-    image: ghcr.io/noumenadigital/packages/keycloak:latest
+    image: quay.io/keycloak/keycloak:26.0.0
     command: |
-      start
+      start-dev
       --spi-events-listener-jboss-logging-success-level=info
       --spi-events-listener-jboss-logging-error-level=error
       --hostname-strict=false
@@ -96,6 +96,7 @@ services:
       --db=postgres
       --hostname-admin=http://keycloak:11000
       --hostname=http://keycloak:11000
+      --http-port=11000
     ports:
       - "11000:11000"
       - "9000:9000"
@@ -113,9 +114,10 @@ services:
       keycloak-db:
         condition: service_started
     healthcheck:
-      test: curl http://keycloak:9000/health || exit 1
-      interval: 1s
-      retries: 60
+      test: curl -f http://localhost:9000/health || exit 1
+      interval: 5s
+      timeout: 5s
+      retries: 20
 
   keycloak-db:
     image: postgres:14.4-alpine
