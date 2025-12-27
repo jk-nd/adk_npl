@@ -282,6 +282,29 @@ resource "keycloak_user" "purchasing_agent" {
   depends_on = [keycloak_realm_user_profile.purchasing_user_profile]
 }
 
+# Approver user for high-value purchase order approvals
+resource "keycloak_user" "approver" {
+  realm_id   = keycloak_realm.purchasing.id
+  username   = "approver"
+  email      = "approver@acme-corp.com"
+  first_name = "Alice"
+  last_name  = "Approver"
+  enabled    = true
+
+  attributes = {
+    "organization" = "Acme Corp"
+    "department"   = "Finance"
+  }
+
+  initial_password {
+    value     = var.default_password
+    temporary = false
+  }
+
+  # User profile must be configured before creating users with custom attributes
+  depends_on = [keycloak_realm_user_profile.purchasing_user_profile]
+}
+
 # ============================================================================
 # Supplier Realm (for supplier agents)
 # ============================================================================

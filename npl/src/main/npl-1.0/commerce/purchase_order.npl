@@ -1,0 +1,166 @@
+package commerce
+
+use schemaorg.v1.MonetaryAmount;
+use schemaorg.v1.QuantitativeValue;
+use commerce.Offer;
+
+/**
+ * PurchaseOrder - Governed purchase order with approval workflow
+ * 
+ * Demonstrates how AI agents can participate in business workflows
+ * while being safely governed by NPL protocol rules.
+ * 
+ * Key features:
+ * - Orders above $5,000 require human approval
+ * - Only users with 'approver' role can approve
+ * - Agents cannot bypass approval requirements
+ * - All actions are auditable
+ * 
+ * Example Usage:
+ *   PurchaseOrder(
+ *       orderNumber = "PO-2024-001",
+ *       acceptedOffer = offerProtocol,
+ *       quantity = 100,
+ *       unitPrice = 45.0,
+ *       total = 4500.0
+ *   )
+ */
+@api
+protocol[buyer, seller, approver] PurchaseOrder(
+    var orderNumber: Text,
+    var acceptedOffer: Offer,
+    var quantity: Number,
+    var unitPrice: Number,
+    var total: Number
+) {
+    require(orderNumber.length() > 0, "Order number is required");
+    require(quantity > 0, "Quantity must be positive");
+    require(unitPrice > 0, "Unit price must be positive");
+    require(total > 0, "Total must be positive");
+    
+    // Approval threshold constant - orders >= $5,000 require approval
+    var APPROVAL_THRESHOLD: Number = 5000.0;
+    
+    // States matching the PoC specification
+    initial state Requested;
+    state Quoted;
+    state ApprovalRequired;
+    state Approved;
+    state Ordered;
+    state Shipped;
+    final state Closed;
+    final state Cancelled;
+    
+    // Internal state tracking
+    var quoteSubmittedAt: Optional<DateTime> = optionalOf<DateTime>();
+    var approvalRequestedAt: Optional<DateTime> = optionalOf<DateTime>();
+    var approvedAt: Optional<DateTime> = optionalOf<DateTime>();
+    var orderedAt: Optional<DateTime> = optionalOf<DateTime>();
+    var shippedAt: Optional<DateTime> = optionalOf<DateTime>();
+    var trackingNumber: Optional<Text> = optionalOf<Text>();
+    
+    /**
+     * Seller submits quote (price confirmation)
+     * 
+     * This action triggers automatic approval check:
+     * - If total >= $5,000 → ApprovalRequired state
+     * - If total < $5,000 → Quoted state (can proceed directly)
+     */
+    @api
+    permission[seller] submitQuote() | Requested {
+        quoteSubmittedAt = optionalOf(now());
+        
+        if (total >= APPROVAL_THRESHOLD) {
+            approvalRequestedAt = optionalOf(now());
+            become ApprovalRequired;
+        } else {
+            become Quoted;
+        };
+    }
+    
+    /**
+     * Human approver approves high-value order
+     * 
+     * CRITICAL: Only users with 'approver' role can execute this.
+     * NPL enforces this at the protocol level - no agent can bypass.
+     */
+    @api
+    permission[approver] approve() | ApprovalRequired {
+        approvedAt = optionalOf(now());
+        become Approved;
+    }
+    
+    /**
+     * Buyer agent attempts to place order
+     * 
+     * BLOCKED unless:
+     * - Quote has been submitted (Quoted or Approved state)
+     * - If approval was required, it must be granted (Approved state)
+     * 
+     * This demonstrates "LLMs suggest, NPL decides" principle.
+     */
+    @api
+    permission[buyer] placeOrder() | Quoted, Approved {
+        orderedAt = optionalOf(now());
+        become Ordered;
+    }
+    
+    /**
+     * Seller ships the order
+     */
+    @api
+    permission[seller] shipOrder(tracking: Text) | Ordered {
+        require(tracking.length() > 0, "Tracking number is required");
+        trackingNumber = optionalOf(tracking);
+        shippedAt = optionalOf(now());
+        become Shipped;
+    }
+    
+    /**
+     * Close the order (buyer confirms receipt)
+     */
+    @api
+    permission[buyer] closeOrder() | Shipped {
+        become Closed;
+    }
+    
+    /**
+     * Cancel the order (both parties can cancel before shipping)
+     */
+    @api
+    permission[buyer | seller] cancelOrder(reason: Text) | Requested, Quoted, ApprovalRequired, Approved, Ordered {
+        require(reason.length() > 0, "Cancellation reason is required");
+        become Cancelled;
+    }
+    
+    /**
+     * Get order summary with approval status
+     */
+    @api
+    permission[buyer | seller | approver] getOrderSummary() returns Text {
+        var approvalStatus = if (total >= APPROVAL_THRESHOLD) {
+            if (approvedAt.isPresent()) {
+                "Approved"
+            } else {
+                "Approval Required"
+            };
+        } else {
+            "No Approval Needed"
+        };
+        
+        return "PO " + orderNumber + 
+               " | Qty: " + quantity.toText() + 
+               " @ $" + unitPrice.toText() + 
+               " | Total: $" + total.toText() + 
+               " | " + approvalStatus;
+    }
+    
+    /**
+     * Check if approval is required for this order
+     */
+    @api
+    permission[buyer | seller | approver] requiresApproval() returns Boolean {
+        return total >= APPROVAL_THRESHOLD;
+    };
+};
+
