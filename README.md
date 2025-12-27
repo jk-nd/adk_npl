@@ -404,6 +404,14 @@ Supporting types in `schemaorg/`:
 
 ## Troubleshooting
 
+### JWKS Authentication Issues
+
+If you encounter `Failed to retrieve JWKS for http://localhost:11000/realms/...` errors, this is because the Engine (running in Docker) cannot reach `localhost:11000` from inside the container.
+
+**Solution:** The Python authentication client automatically rewrites the `Host` header to `keycloak:11000` when connecting to `localhost:11000`. This makes Keycloak issue tokens with the `keycloak:11000` issuer, which the Engine can reach via the Docker network. This fix is implemented in `adk_npl/auth.py` and works automatically.
+
+**Note:** The Engine doesn't support `ENGINE_ISSUER_JWKS_URL_OVERRIDES` in the current version, so Host header rewriting is the recommended workaround.
+
 ### Token Claims Missing (organization, department)
 
 Keycloak 26+ requires explicit User Profile configuration:

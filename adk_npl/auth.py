@@ -79,11 +79,19 @@ class KeycloakAuth(AuthStrategy):
             "client_id": self.client_id
         }
         
+        # Rewrite Host header so Keycloak uses keycloak:11000 as issuer
+        # This allows Engine (in Docker) to fetch JWKS from keycloak:11000
+        # We connect to localhost:11000 but tell Keycloak the Host is keycloak:11000
+        request_headers = {"Content-Type": "application/x-www-form-urlencoded"}
+        if "localhost:11000" in self.keycloak_url:
+            # Replace localhost with keycloak in Host header
+            request_headers["Host"] = "keycloak:11000"
+        
         try:
             response = requests.post(
                 token_url,
                 data=payload,
-                headers={"Content-Type": "application/x-www-form-urlencoded"}
+                headers=request_headers
             )
             response.raise_for_status()
             

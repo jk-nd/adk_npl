@@ -10,5 +10,5 @@ commerce.Product: {}
 # Offer protocol - parties passed explicitly via @parties
 commerce.Offer: {}
 
-# Order protocol - parties passed explicitly via @parties
-commerce.Order: {}
+# PurchaseOrder protocol - parties passed explicitly via @parties
+commerce.PurchaseOrder: {}

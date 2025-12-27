@@ -42,8 +42,10 @@ async def get_authenticated_client(realm: str, username: str) -> NPLClient:
     """Create an authenticated NPL client"""
     password = os.getenv("SEED_TEST_USERS_PASSWORD", "Welcome123")
     
+    keycloak_url = os.getenv("NPL_KEYCLOAK_URL", "http://localhost:11000")
+    
     auth = KeycloakAuth(
-        keycloak_url=os.getenv("NPL_KEYCLOAK_URL", "http://localhost:11000"),
+        keycloak_url=keycloak_url,
         realm=realm,
         client_id=realm,
         username=username,

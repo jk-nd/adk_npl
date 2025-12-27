@@ -13,18 +13,17 @@ services:
       - ./npl/src/main/npl-1.0:/npl/npl-1.0:ro
     extra_hosts:
       - "host.docker.internal:host-gateway"  # Allow container to reach host machine
-      - "localhost:host-gateway"  # Allow container to reach host's localhost
+      # Note: localhost mapping doesn't work reliably, Engine uses keycloak service name instead
     environment:
       ENGINE_DEV_MODE: ${DEV_MODE:-false}
       # Trust both purchasing and supplier realms for federated identity
       # Accept both localhost (browser) and keycloak (Docker) hostnames
       ENGINE_ALLOWED_ISSUERS: >-
-        http://localhost:11000/realms/purchasing,
-        http://localhost:11000/realms/supplier,
         http://keycloak:11000/realms/purchasing,
         http://keycloak:11000/realms/supplier
-      # Map localhost issuer to keycloak for JWKS fetching (engine can't reach host's localhost)
-      ENGINE_JWT_ISSUER_BASE_URL_OVERRIDE_localhost:11000: http://keycloak:11000
+      # Override JWKS URL resolution: when Engine sees localhost issuer, use keycloak service instead
+      # Format: issuer_url=jwks_url (comma-separated for multiple mappings)
+      ENGINE_ISSUER_JWKS_URL_OVERRIDES: "http://localhost:11000/realms/purchasing=http://keycloak:11000/realms/purchasing/protocol/openid-connect/certs,http://localhost:11000/realms/supplier=http://keycloak:11000/realms/supplier/protocol/openid-connect/certs"
       ENGINE_DB_URL: "jdbc:postgresql://engine-db:5432/engine"
       ENGINE_DB_USER: engine
       ENGINE_DB_PASSWORD: secret
@@ -43,7 +42,7 @@ services:
       engine-db:
         condition: service_started
       keycloak:
-        condition: service_healthy
+        condition: service_started  # We verify readiness via API in setup script
     healthcheck:
       test: curl -f http://localhost:12000/actuator/health || exit 1
       interval: 10s
@@ -91,7 +90,7 @@ services:
       TF_VAR_app_name: ${VITE_NC_KC_REALM:-poc}
     depends_on:
       keycloak:
-        condition: service_healthy
+        condition: service_started
 
   keycloak:
     image: quay.io/keycloak/keycloak:26.0.0
@@ -118,6 +117,8 @@ services:
       KC_HTTP_ENABLED: "true"
       KC_HTTP_PORT: 11000
       KC_HOSTNAME_STRICT: "false"
+      # Note: Host header rewriting in Python auth handles issuer (see adk_npl/auth.py)
+      # We don't need to set KC_HOSTNAME here since Python clients rewrite Host header
     depends_on:
       keycloak-db:
         condition: service_started
