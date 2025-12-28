@@ -5,6 +5,7 @@ Provides convenience functions for easy integration.
 """
 
 import logging
+import asyncio
 from typing import List, Optional, Any
 from google.adk.agents import LlmAgent
 
@@ -33,12 +34,56 @@ class NPLToolRegistry:
             config: NPL configuration
         """
         self.config = config
-        self.npl_client = NPLClient(base_url=config.engine_url)
+        self._auth_strategy = None
+        self.npl_client = NPLClient(
+            base_url=config.engine_url,
+            token_refresh_callback=self._refresh_token_sync
+        )
         self.tool_generator = NPLToolGenerator(
             npl_client=self.npl_client,
             cache_ttl=config.cache_ttl
         )
         self._authenticated = False
+    
+    def _refresh_token_sync(self) -> str:
+        """
+        Synchronous wrapper for token refresh (for use as callback).
+        
+        Returns:
+            New JWT access token
+        """
+        import nest_asyncio
+        nest_asyncio.apply()
+        return asyncio.run(self._refresh_token_async())
+    
+    async def _refresh_token_async(self) -> str:
+        """
+        Async token refresh.
+        
+        Returns:
+            New JWT access token
+        """
+        if self._auth_strategy and hasattr(self._auth_strategy, 'refresh_token'):
+            try:
+                token = await self._auth_strategy.refresh_token()
+                self.npl_client.set_auth_token(token)
+                return token
+            except Exception as e:
+                logger.warning(f"Token refresh failed, re-authenticating: {e}")
+                # Fall back to full authentication
+                return await self._authenticate_internal()
+        else:
+            # Fall back to full authentication
+            return await self._authenticate_internal()
+    
+    async def _authenticate_internal(self) -> str:
+        """Internal authentication method that returns token."""
+        auth_strategy = create_auth_strategy(self.config)
+        if auth_strategy:
+            token = await auth_strategy.authenticate()
+            self._auth_strategy = auth_strategy
+            return token
+        raise AuthenticationError("No authentication configured")
     
     async def authenticate(self):
         """
@@ -51,14 +96,10 @@ class NPLToolRegistry:
             logger.info("Already authenticated")
             return
         
-        auth_strategy = create_auth_strategy(self.config)
-        if auth_strategy:
-            token = await auth_strategy.authenticate()
-            self.npl_client.set_auth_token(token)
-            self._authenticated = True
-            logger.info("✅ Authentication successful")
-        else:
-            logger.warning("No authentication configured")
+        token = await self._authenticate_internal()
+        self.npl_client.set_auth_token(token)
+        self._authenticated = True
+        logger.info("✅ Authentication successful")
     
     async def discover_tools(
         self,

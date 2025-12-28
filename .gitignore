@@ -11,6 +11,8 @@ env/
 *.egg-info/
 dist/
 build/
+*.pyc
+.pytest_cache/
 
 # Testing
 .pytest_cache/

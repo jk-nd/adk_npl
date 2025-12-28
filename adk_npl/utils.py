@@ -14,7 +14,16 @@ T = TypeVar('T')
 
 class NPLIntegrationError(Exception):
     """Base exception for NPL integration errors."""
-    pass
+    
+    def __init__(self, message: str, details: Optional[Dict[str, Any]] = None):
+        super().__init__(message)
+        self.message = message
+        self.details = details or {}
+    
+    def __str__(self) -> str:
+        if self.details:
+            return f"{self.message} | Details: {self.details}"
+        return self.message
 
 
 class AuthenticationError(NPLIntegrationError):
@@ -29,6 +38,57 @@ class ToolDiscoveryError(NPLIntegrationError):
 
 class PackageDiscoveryError(NPLIntegrationError):
     """Failed to discover NPL packages."""
+    pass
+
+
+class NPLClientError(NPLIntegrationError):
+    """Error from NPL Engine API call."""
+    
+    def __init__(
+        self,
+        message: str,
+        status_code: Optional[int] = None,
+        response_body: Optional[str] = None,
+        url: Optional[str] = None
+    ):
+        details = {}
+        if status_code:
+            details["status_code"] = status_code
+        if response_body:
+            details["response_body"] = response_body
+        if url:
+            details["url"] = url
+        super().__init__(message, details)
+        self.status_code = status_code
+        self.response_body = response_body
+        self.url = url
+
+
+class TokenExpiredError(AuthenticationError):
+    """JWT token has expired and needs to be refreshed."""
+    
+    def __init__(
+        self,
+        message: str,
+        status_code: Optional[int] = None,
+        response_body: Optional[str] = None,
+        url: Optional[str] = None
+    ):
+        details = {}
+        if status_code:
+            details["status_code"] = status_code
+        if response_body:
+            details["response_body"] = response_body
+        if url:
+            details["url"] = url
+        super().__init__(message, details)
+        self.status_code = status_code
+        self.response_body = response_body
+        self.url = url
+
+
+class ServiceUnavailableError(NPLClientError):
+    """NPL Engine service is unavailable."""
     pass
 
 
