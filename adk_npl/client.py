@@ -10,9 +10,9 @@ import logging
 import time
 from typing import Dict, List, Any, Optional, Callable
 
-from .utils import NPLClientError, ServiceUnavailableError, TokenExpiredError
-from .retry import retry_with_backoff, is_retryable_exception
+from .utils import NPLClientError, ServiceUnavailableError, TokenExpiredError, is_retryable_exception
 from .monitoring import get_metrics
+from .activity_logger import get_activity_logger
 
 logger = logging.getLogger(__name__)
 
@@ -138,6 +138,7 @@ class NPLClient:
         last_exception = None
         
         metrics = get_metrics()
+        activity_logger = get_activity_logger()
         overall_start_time = time.time()
         
         for attempt in range(self.max_retries + 1):
@@ -156,6 +157,14 @@ class NPLClient:
                 # Record metrics (use attempt latency for individual call, overall for total)
                 metrics.increment("npl.api.calls", method=method, status_code=response.status_code)
                 metrics.record_latency("npl.api.latency", attempt_latency, method=method)
+                
+                # Log activity
+                activity_logger.log_npl_api_call(
+                    method=method,
+                    endpoint=url.replace(self.base_url, ""),
+                    status_code=response.status_code,
+                    response_time=attempt_latency
+                )
                 if attempt > 0:
                     metrics.record_latency("npl.api.latency_with_retries", overall_latency, method=method)
                 
@@ -182,6 +191,14 @@ class NPLClient:
                         url=url,
                         status_code=response.status_code,
                         method=method
+                    )
+                    # Log error activity
+                    activity_logger.log_npl_api_call(
+                        method=method,
+                        endpoint=url.replace(self.base_url, ""),
+                        status_code=response.status_code,
+                        response_time=attempt_latency,
+                        error=f"HTTP {response.status_code}"
                     )
                     self._handle_response_error(response, url)
                 

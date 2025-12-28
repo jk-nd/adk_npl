@@ -29,6 +29,11 @@ from .monitoring import (
     HealthCheck,
     get_metrics
 )
+from .activity_logger import (
+    ActivityLogger,
+    get_activity_logger,
+    log_activity
+)
 
 __version__ = "0.1.0"
 
@@ -69,5 +74,10 @@ __all__ = [
     "MetricsCollector",
     "HealthCheck",
     "get_metrics",
+    
+    # Activity Logging
+    "ActivityLogger",
+    "get_activity_logger",
+    "log_activity",
 ]
 
