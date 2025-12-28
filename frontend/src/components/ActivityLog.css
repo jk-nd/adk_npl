@@ -171,6 +171,7 @@
 .type-badge.icon-auth { color: #f59e0b; }
 .type-badge.icon-bridge { color: #ec4899; }
 .type-badge.icon-demo { color: #64748b; }
+.type-badge.icon-a2a { color: #f43f5e; font-weight: 900; } /* Rose for A2A */
 .type-badge.icon-default { color: var(--color-text-muted); }
 
 .actor-badge {

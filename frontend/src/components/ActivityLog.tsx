@@ -32,6 +32,10 @@ const eventTypeIcons: Record<string, { icon: string; class: string }> = {
   authentication: { icon: '●', class: 'icon-auth' },
   bridge_operation: { icon: '▪', class: 'icon-bridge' },
   demo: { icon: '▸', class: 'icon-demo' },
+  // A2A events
+  a2a_demo: { icon: '⇄', class: 'icon-a2a' },
+  a2a_transfer: { icon: '⇢', class: 'icon-a2a' },
+  a2a_response: { icon: '⇠', class: 'icon-a2a' },
 };
 
 export function ActivityLog() {
@@ -97,6 +101,8 @@ export function ActivityLog() {
             <option value="agent_action">Agent Actions</option>
             <option value="agent_reasoning">Agent Reasoning</option>
             <option value="agent_message">Agent Messages</option>
+            <option value="a2a_demo">A2A Communication</option>
+            <option value="a2a_transfer">A2A Transfers</option>
             <option value="npl_api">API Calls</option>
             <option value="state_transition">State Transitions</option>
             <option value="authentication">Authentication</option>

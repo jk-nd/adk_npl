@@ -307,6 +307,18 @@ async def main():
     print("=" * 80)
     print()
     
+    # Log A2A demo start
+    activity_logger.log_event(
+        event_type="a2a_demo",
+        actor="system",
+        action="a2a_negotiation_start",
+        details={
+            "buyer_url": f"http://localhost:{BUYER_PORT}",
+            "supplier_url": f"http://localhost:{SUPPLIER_PORT}"
+        },
+        level="info"
+    )
+    
     # Create a session for the buyer to start the conversation
     await session_service.create_session(
         app_name="buyer_a2a",
@@ -333,6 +345,14 @@ Start by sending a message to SupplierAgent asking about Industrial Pump X avail
     print("   Sending initial prompt to Buyer agent...")
     print()
     
+    # Log initial prompt
+    activity_logger.log_agent_message(
+        from_agent="user",
+        to_agent="buyer_agent",
+        message=initial_prompt.strip(),
+        message_type="a2a_initiation"
+    )
+    
     async for event in buyer_runner.run_async(
         new_message=content,
         user_id="buyer_user",
@@ -344,12 +364,53 @@ Start by sending a message to SupplierAgent asking about Industrial Pump X avail
             for part in event.content.parts:
                 if hasattr(part, "text") and part.text:
                     print(f"   💬 Buyer: {part.text}")
+                    # Log buyer's text response
+                    activity_logger.log_agent_reasoning(
+                        actor="buyer_agent",
+                        reasoning=part.text,
+                        context={"step": "a2a_negotiation"}
+                    )
                 if hasattr(part, "function_call") and part.function_call:
                     func = part.function_call
                     print(f"   🔧 Tool call: {func.name}")
+                    # Log tool call - especially A2A transfers
+                    if "transfer" in func.name.lower():
+                        activity_logger.log_event(
+                            event_type="a2a_transfer",
+                            actor="buyer_agent",
+                            action=f"transfer_to_supplier",
+                            details={"tool": func.name},
+                            level="info"
+                        )
+                    else:
+                        activity_logger.log_agent_action(
+                            agent="buyer_agent",
+                            action=func.name,
+                            protocol="a2a",
+                            protocol_id=None,
+                            outcome="called"
+                        )
                 if hasattr(part, "function_response") and part.function_response:
                     resp = part.function_response
                     print(f"   📨 Response from: {resp.name}")
+                    # Log A2A response
+                    if "transfer" in resp.name.lower() or "agent" in resp.name.lower():
+                        activity_logger.log_event(
+                            event_type="a2a_response",
+                            actor="supplier_agent",
+                            action="a2a_message_received",
+                            details={"from_tool": resp.name},
+                            level="info"
+                        )
+    
+    # Log demo complete
+    activity_logger.log_event(
+        event_type="a2a_demo",
+        actor="system",
+        action="a2a_negotiation_complete",
+        details={"status": "success"},
+        level="info"
+    )
     
     print()
     print("=" * 80)
@@ -360,6 +421,8 @@ Start by sending a message to SupplierAgent asking about Industrial Pump X avail
     print("  1. Buyer and Supplier agents running as A2A servers")
     print("  2. Direct agent-to-agent communication via A2A protocol")
     print("  3. Transparent message exchange visible in activity log")
+    print()
+    print(f"📝 Activity log: logs/{activity_logger.log_file.name}")
     print()
 
 
