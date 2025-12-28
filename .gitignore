@@ -33,6 +33,13 @@ htmlcov/
 
 # Logs
 *.log
+.cursor/debug.log
+
+# Frontend
+frontend/dist/
+frontend/node_modules/
+frontend/.env.development
+frontend/openapi-ts-error-*.log
 
 # OS
 .DS_Store

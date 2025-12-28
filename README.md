@@ -32,10 +32,10 @@ This project demonstrates how AI agents can autonomously initiate business trans
 │                          ▼                                       │
 │           ┌──────────────────────────────┐                       │
 │           │        NPL Engine            │                       │
-│           │   (Trusts both issuers)      │                       │
+│           │   (Trusts keycloak issuer)   │                       │
 │           │   schema.org commerce        │                       │
 │           │   protocols (Product,        │                       │
-│           │   Offer, Order)              │                       │
+│           │   Offer, PurchaseOrder)       │                       │
 │           └──────────────────────────────┘                       │
 └─────────────────────────────────────────────────────────────────┘
 ```
@@ -84,7 +84,38 @@ We have provided a helper script to set up the environment correctly:
 
 Access the UI at http://localhost:8000
 
-### 4. Run Approval Workflow Demo
+### 4. Run NPL Approval Dashboard (NPL-Native Frontend)
+
+The approval dashboard provides a human-friendly interface for approving high-value orders, using type-safe clients generated directly from NPL Engine's OpenAPI specifications:
+
+```bash
+cd frontend
+npm install
+npm run dev
+```
+
+Access at http://localhost:5173
+
+**Note:** On first run, you may need to add a hosts entry so your browser can resolve the `keycloak` hostname:
+```bash
+./setup_hosts.sh
+```
+
+**Key Features:**
+- ✅ **Type-safe API clients** - Auto-generated from NPL protocols
+- ✅ **Direct NPL integration** - No backend proxy needed
+- ✅ **Keycloak authentication** - Built-in auth handling with login/logout
+- ✅ **Light/Dark theme toggle** - Modern UI with theme switching
+- ✅ **Always in sync** - Regenerate types when protocols change
+
+**To regenerate types after protocol changes:**
+```bash
+cd frontend
+curl -s http://localhost:12000/npl/commerce/-/openapi.json > openapi/commerce-openapi.json
+npx openapi-typescript openapi/commerce-openapi.json -o ./src/clients/commerce/types.ts
+```
+
+### 5. Run Approval Workflow Demo
 
 The main demo showcases the end-to-end approval workflow for high-value purchases:
 
@@ -203,11 +234,19 @@ adk-demo/
 ├── keycloak-provisioning/      # Terraform for Keycloak setup
 │   └── terraform.tf            # Realms, clients, users
 │
+├── frontend/                   # React + TypeScript approval dashboard
+│   ├── src/
+│   │   ├── components/         # ApprovalDashboard component
+│   │   ├── contexts/           # Theme context
+│   │   └── clients/            # Type-safe NPL API clients
+│   └── openapi/                # OpenAPI specs for type generation
+│
 ├── scripts/
 │   ├── setup-fresh.sh          # Complete clean setup
 │   ├── configure-user-profiles.sh  # Keycloak 26+ config
 │   └── wait-for-services.sh    # Health check utilities
 │
+├── setup_hosts.sh              # Helper script for keycloak hostname
 ├── docker-compose.yml          # Service orchestration
 └── .env                        # Environment variables
 ```
@@ -364,6 +403,14 @@ Supporting types in `schemaorg/`:
 3. Run user profile config: `./scripts/configure-user-profiles.sh`
 
 ## Troubleshooting
+
+### JWKS Authentication Issues
+
+If you encounter `Failed to retrieve JWKS for http://localhost:11000/realms/...` errors, this is because the Engine (running in Docker) cannot reach `localhost:11000` from inside the container.
+
+**Solution:** The Python authentication client automatically rewrites the `Host` header to `keycloak:11000` when connecting to `localhost:11000`. This makes Keycloak issue tokens with the `keycloak:11000` issuer, which the Engine can reach via the Docker network. This fix is implemented in `adk_npl/auth.py` and works automatically.
+
+**Note:** The Engine doesn't support `ENGINE_ISSUER_JWKS_URL_OVERRIDES` in the current version, so Host header rewriting is the recommended workaround.
 
 ### Token Claims Missing (organization, department)
 

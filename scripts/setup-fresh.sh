@@ -34,35 +34,74 @@ echo ""
 echo "4️⃣  Starting databases..."
 docker-compose up -d engine-db keycloak-db
 echo -n "   Waiting for databases"
-for i in {1..30}; do
+DB_READY=0
+for i in {1..60}; do
     if docker-compose ps engine-db keycloak-db 2>&1 | grep -q "healthy.*healthy"; then
         echo " ✅"
+        DB_READY=1
         break
     fi
-    echo -n "."
+    if [ $((i % 5)) -eq 0 ]; then
+        echo -n "."
+    fi
     sleep 1
 done
+
+if [ $DB_READY -eq 0 ]; then
+    echo " ⚠️"
+    echo "   Databases may still be initializing, but continuing..."
+fi
 
 # Step 5: Start Keycloak
 echo ""
 echo "5️⃣  Starting Keycloak..."
 docker-compose up -d keycloak
-echo -n "   Waiting for Keycloak"
-for i in {1..60}; do
-    if docker-compose ps keycloak 2>&1 | grep -q "healthy"; then
+echo -n "   Waiting for Keycloak to be ready"
+KEYCLOAK_READY=0
+for i in {1..120}; do
+    # Check if Keycloak is responding (more reliable than health check)
+    if curl -s http://localhost:11000/realms/master 2>/dev/null | grep -q '"realm":"master"'; then
         echo " ✅"
+        KEYCLOAK_READY=1
         break
     fi
-    echo -n "."
+    if [ $((i % 3)) -eq 0 ]; then
+        echo -n "."
+    fi
     sleep 1
 done
 
-# Step 6: Run provisioning
+if [ $KEYCLOAK_READY -eq 0 ]; then
+    echo " ⚠️"
+    echo "   Keycloak is slow to start, but continuing..."
+    echo "   (It may still be initializing in the background)"
+fi
+
+# Step 6: Verify Keycloak is responding before provisioning
 echo ""
-echo "6️⃣  Provisioning Keycloak (creating realms and users)..."
+echo "6️⃣  Verifying Keycloak is ready for provisioning..."
+echo -n "   Checking Keycloak API"
+for i in {1..10}; do
+    if curl -s http://localhost:11000/realms/master 2>/dev/null | grep -q '"realm":"master"'; then
+        echo " ✅"
+        break
+    fi
+    if [ $i -eq 10 ]; then
+        echo " ⚠️"
+        echo "   Keycloak may not be fully ready, but attempting provisioning anyway..."
+    else
+        echo -n "."
+        sleep 1
+    fi
+done
+
+# Step 7: Run provisioning
+echo ""
+echo "7️⃣  Provisioning Keycloak (creating realms and users)..."
 docker-compose up -d keycloak-provisioning
 echo -n "   Waiting for provisioning"
-for i in {1..120}; do
+PROV_SUCCESS=0
+for i in {1..180}; do
     if docker-compose logs keycloak-provisioning 2>&1 | grep -q "Apply complete"; then
         echo " ✅"
         PROV_SUCCESS=1
@@ -77,8 +116,16 @@ for i in {1..120}; do
             docker-compose logs keycloak-provisioning 2>&1 | grep -A 2 "Error:" | head -10
             exit 1
         fi
+        # If exited successfully but no "Apply complete", check logs
+        if docker-compose logs keycloak-provisioning 2>&1 | grep -q "Apply complete"; then
+            echo " ✅"
+            PROV_SUCCESS=1
+            break
+        fi
     fi
-    echo -n "."
+    if [ $((i % 5)) -eq 0 ]; then
+        echo -n "."
+    fi
     sleep 1
 done
 
@@ -97,23 +144,33 @@ else
     echo "   ⚠️  configure-user-profiles.sh not found, skipping"
 fi
 
-# Step 7: Start Engine
+# Step 8: Start Engine
 echo ""
-echo "7️⃣  Starting NPL Engine..."
+echo "8️⃣  Starting NPL Engine..."
 docker-compose up -d engine
 echo -n "   Waiting for Engine"
-for i in {1..60}; do
-    if docker-compose ps engine 2>&1 | grep -q "healthy"; then
+ENGINE_READY=0
+for i in {1..90}; do
+    # Check if engine is responding (more reliable than health check)
+    if curl -s http://localhost:12000/actuator/health 2>/dev/null | grep -q '"status":"UP"'; then
         echo " ✅"
+        ENGINE_READY=1
         break
     fi
-    echo -n "."
+    if [ $((i % 3)) -eq 0 ]; then
+        echo -n "."
+    fi
     sleep 1
 done
 
-# Step 8: Verify
+if [ $ENGINE_READY -eq 0 ]; then
+    echo " ⚠️"
+    echo "   Engine may still be initializing..."
+fi
+
+# Step 9: Verify
 echo ""
-echo "8️⃣  Verifying setup..."
+echo "9️⃣  Verifying setup..."
 sleep 2
 
 echo -n "   Purchasing realm: "
@@ -141,8 +198,10 @@ echo ""
 echo "================================"
 echo "✅ Setup complete!"
 echo ""
-echo "Test commands:"
-echo "  python test_purchasing_agent.py"
-echo "  python test_supplier_agent.py"
+echo "Next steps:"
+echo "  • For frontend UI: Run ./setup_hosts.sh (adds keycloak hostname)"
+echo "  • Test agents:"
+echo "    python test_purchasing_agent.py"
+echo "    python test_supplier_agent.py"
 echo ""
 
