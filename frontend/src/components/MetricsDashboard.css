@@ -85,12 +85,30 @@
   border-left: 4px solid #ef4444;
 }
 
+.metric-card.llm {
+  border-left: 4px solid #8b5cf6;
+}
+
+.metric-card.a2a {
+  border-left: 4px solid #f43f5e;
+}
+
+.metric-card.npl {
+  border-left: 4px solid #06b6d4;
+}
+
 .metric-icon {
   font-size: 1rem;
   font-weight: 700;
   color: var(--color-text-muted);
   opacity: 0.8;
   line-height: 1;
+}
+
+.metric-sublabel {
+  font-size: 0.75rem;
+  color: var(--color-text-muted);
+  margin-top: 0.25rem;
 }
 
 .metric-content {
@@ -357,5 +375,35 @@
   background-color: var(--color-card);
   border: 1px dashed var(--color-border);
   border-radius: 8px;
+}
+
+/* Breakdown grid for LLM/A2A/NPL metrics */
+.breakdown-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 0.75rem;
+  padding: 0.5rem;
+}
+
+.breakdown-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0.75rem 1rem;
+  background-color: var(--color-card);
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+}
+
+.breakdown-label {
+  font-size: 0.8125rem;
+  color: var(--color-text-muted);
+  font-family: 'Courier New', monospace;
+}
+
+.breakdown-value {
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--color-text);
 }
 

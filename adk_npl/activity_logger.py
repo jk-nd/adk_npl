@@ -259,6 +259,53 @@ class ActivityLogger:
         level = "info" if success else "error"
         self.log_event("bridge_operation", "adk_npl_bridge", operation, details, level)
     
+    def log_llm_call(
+        self,
+        model: str,
+        agent: str,
+        prompt_tokens: Optional[int] = None,
+        completion_tokens: Optional[int] = None,
+        latency_ms: Optional[float] = None,
+        success: bool = True,
+        error: Optional[str] = None,
+        **kwargs
+    ):
+        """Log an LLM API call."""
+        details = {
+            "model": model,
+            "agent": agent,
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": completion_tokens,
+            "total_tokens": (prompt_tokens or 0) + (completion_tokens or 0),
+            "latency_ms": round(latency_ms, 2) if latency_ms else None,
+            "success": success,
+            "error": error,
+            **kwargs
+        }
+        level = "error" if error else "info"
+        self.log_event("llm_call", agent, f"call_{model}", details, level)
+    
+    def log_a2a_transfer(
+        self,
+        from_agent: str,
+        to_agent: str,
+        task: str,
+        success: bool = True,
+        latency_ms: Optional[float] = None,
+        **kwargs
+    ):
+        """Log an A2A transfer between agents."""
+        details = {
+            "from_agent": from_agent,
+            "to_agent": to_agent,
+            "task": task,
+            "success": success,
+            "latency_ms": round(latency_ms, 2) if latency_ms else None,
+            **kwargs
+        }
+        level = "info" if success else "error"
+        self.log_event("a2a_transfer", from_agent, f"transfer_to_{to_agent}", details, level)
+    
     def get_recent_events(self, limit: int = 100) -> List[Dict[str, Any]]:
         """Get recent events from buffer."""
         with self.buffer_lock:

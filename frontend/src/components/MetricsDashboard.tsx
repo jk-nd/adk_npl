@@ -11,6 +11,23 @@ interface MetricsSummary {
     message: string;
     tags: Record<string, any>;
   }>;
+  // Enhanced metrics
+  llm_calls?: {
+    total: number;
+    by_agent: Record<string, number>;
+    avg_latency_ms: number;
+    total_latency_ms: number;
+  };
+  a2a_transfers?: {
+    total: number;
+    by_agent: Record<string, number>;
+    avg_latency_ms: number;
+  };
+  npl_calls?: {
+    total: number;
+    by_action: Record<string, number>;
+    avg_latency_ms: number;
+  };
   timestamp: string;
 }
 
@@ -82,36 +99,109 @@ export function MetricsDashboard() {
         </div>
       </div>
 
-      {/* Overview */}
+      {/* Key Metrics Overview */}
       <div className="metrics-overview">
-        <div className="metric-card">
-          <div className="metric-icon">◉</div>
+        <div className="metric-card llm">
+          <div className="metric-icon">◎</div>
           <div className="metric-content">
-            <div className="metric-label">Total API Calls</div>
-            <div className="metric-value">{getTotalCalls()}</div>
+            <div className="metric-label">LLM API Calls</div>
+            <div className="metric-value">{metrics?.llm_calls?.total || 0}</div>
+            {metrics?.llm_calls?.avg_latency_ms && (
+              <div className="metric-sublabel">
+                Avg: {formatDuration(metrics.llm_calls.avg_latency_ms)}
+              </div>
+            )}
           </div>
         </div>
-        <div className="metric-card">
-          <div className="metric-icon">◐</div>
+        <div className="metric-card a2a">
+          <div className="metric-icon">⇄</div>
           <div className="metric-content">
-            <div className="metric-label">Avg Latency</div>
-            <div className="metric-value">
-              {(() => {
-                const latencyKey = Object.keys(metrics?.latencies || {})[0];
-                const latencyStats = latencyKey ? metrics?.latencies?.[latencyKey]?.[''] : null;
-                return latencyStats?.avg ? formatDuration(latencyStats.avg) : 'N/A';
-              })()}
-            </div>
+            <div className="metric-label">A2A Transfers</div>
+            <div className="metric-value">{metrics?.a2a_transfers?.total || 0}</div>
+            {metrics?.a2a_transfers?.avg_latency_ms && (
+              <div className="metric-sublabel">
+                Avg: {formatDuration(metrics.a2a_transfers.avg_latency_ms)}
+              </div>
+            )}
+          </div>
+        </div>
+        <div className="metric-card npl">
+          <div className="metric-icon">◆</div>
+          <div className="metric-content">
+            <div className="metric-label">NPL API Calls</div>
+            <div className="metric-value">{metrics?.npl_calls?.total || getTotalCalls()}</div>
+            {metrics?.npl_calls?.avg_latency_ms && (
+              <div className="metric-sublabel">
+                Avg: {formatDuration(metrics.npl_calls.avg_latency_ms)}
+              </div>
+            )}
           </div>
         </div>
         <div className="metric-card error">
           <div className="metric-icon">◈</div>
           <div className="metric-content">
-            <div className="metric-label">Recent Errors</div>
+            <div className="metric-label">Errors</div>
             <div className="metric-value">{getTotalErrors()}</div>
           </div>
         </div>
       </div>
+
+      {/* LLM Calls by Agent */}
+      {metrics?.llm_calls?.by_agent && Object.keys(metrics.llm_calls.by_agent).length > 0 && (
+        <div className="metrics-section">
+          <details open className="section-details">
+            <summary className="section-summary">
+              <h3>◎ LLM Calls by Agent</h3>
+            </summary>
+            <div className="breakdown-grid">
+              {Object.entries(metrics.llm_calls.by_agent).map(([agent, count]) => (
+                <div key={agent} className="breakdown-item">
+                  <span className="breakdown-label">{agent}</span>
+                  <span className="breakdown-value">{count}</span>
+                </div>
+              ))}
+            </div>
+          </details>
+        </div>
+      )}
+
+      {/* A2A Transfers by Agent */}
+      {metrics?.a2a_transfers?.by_agent && Object.keys(metrics.a2a_transfers.by_agent).length > 0 && (
+        <div className="metrics-section">
+          <details open className="section-details">
+            <summary className="section-summary">
+              <h3>⇄ A2A Transfers by Agent</h3>
+            </summary>
+            <div className="breakdown-grid">
+              {Object.entries(metrics.a2a_transfers.by_agent).map(([agent, count]) => (
+                <div key={agent} className="breakdown-item">
+                  <span className="breakdown-label">{agent}</span>
+                  <span className="breakdown-value">{count}</span>
+                </div>
+              ))}
+            </div>
+          </details>
+        </div>
+      )}
+
+      {/* NPL Actions */}
+      {metrics?.npl_calls?.by_action && Object.keys(metrics.npl_calls.by_action).length > 0 && (
+        <div className="metrics-section">
+          <details open className="section-details">
+            <summary className="section-summary">
+              <h3>◆ NPL Actions</h3>
+            </summary>
+            <div className="breakdown-grid">
+              {Object.entries(metrics.npl_calls.by_action).map(([action, count]) => (
+                <div key={action} className="breakdown-item">
+                  <span className="breakdown-label">{action}</span>
+                  <span className="breakdown-value">{count}</span>
+                </div>
+              ))}
+            </div>
+          </details>
+        </div>
+      )}
 
       {/* Counters */}
       {metrics?.counters && Object.keys(metrics.counters).length > 0 && (

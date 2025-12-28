@@ -282,19 +282,21 @@ async def get_metrics_summary() -> Dict[str, Any]:
     Get metrics summary calculated from log files.
     
     Returns:
-        Metrics summary with counters, latencies, and recent errors
+        Metrics summary with counters, latencies, LLM calls, A2A transfers, and recent errors
     """
     try:
         # Read the latest log file
         logs_dir = Path(__file__).parent.parent / "logs"
         if not logs_dir.exists():
-            return {"counters": {}, "latencies": {}, "recent_errors": [], "timestamp": ""}
+            return {"counters": {}, "latencies": {}, "recent_errors": [], "timestamp": "",
+                    "llm_calls": None, "a2a_transfers": None, "npl_calls": None}
         
         latest_link = logs_dir / "activity_latest.json"
         if not latest_link.exists():
             log_files = sorted(logs_dir.glob("activity_*.json"), key=lambda p: p.stat().st_mtime, reverse=True)
             if not log_files:
-                return {"counters": {}, "latencies": {}, "recent_errors": [], "timestamp": ""}
+                return {"counters": {}, "latencies": {}, "recent_errors": [], "timestamp": "",
+                        "llm_calls": None, "a2a_transfers": None, "npl_calls": None}
             log_file = log_files[0]
         else:
             log_file = latest_link
@@ -305,6 +307,21 @@ async def get_metrics_summary() -> Dict[str, Any]:
         latencies = defaultdict(list)
         recent_errors = []
         
+        # LLM metrics
+        llm_calls_total = 0
+        llm_calls_by_agent = defaultdict(int)
+        llm_latencies = []
+        
+        # A2A metrics
+        a2a_transfers_total = 0
+        a2a_by_agent = defaultdict(int)
+        a2a_latencies = []
+        
+        # NPL metrics
+        npl_calls_total = 0
+        npl_by_action = defaultdict(int)
+        npl_latencies = []
+        
         with open(log_file, 'r') as f:
             for line in f:
                 if not line.strip():
@@ -314,20 +331,50 @@ async def get_metrics_summary() -> Dict[str, Any]:
                     event_type = event.get('event_type', 'unknown')
                     actor = event.get('actor', 'unknown')
                     level = event.get('level', 'info')
+                    details = event.get('details', {})
                     
                     # Count events by type and actor
                     counters[f"{event_type}_by_actor"][actor] += 1
                     counters[f"events_by_type"][event_type] += 1
                     counters[f"events_by_level"][level] += 1
                     
-                    # Track latencies for NPL API calls
-                    if event_type == 'npl_api' and 'details' in event:
-                        response_time = event['details'].get('response_time_ms', 0)
+                    # LLM call metrics
+                    if event_type == 'llm_call':
+                        llm_calls_total += 1
+                        agent = details.get('agent', actor)
+                        llm_calls_by_agent[agent] += 1
+                        latency = details.get('latency_ms', 0)
+                        if latency > 0:
+                            llm_latencies.append(latency)
+                    
+                    # A2A transfer metrics
+                    if event_type == 'a2a_transfer':
+                        a2a_transfers_total += 1
+                        from_agent = details.get('from_agent', actor)
+                        a2a_by_agent[from_agent] += 1
+                        latency = details.get('latency_ms', 0)
+                        if latency > 0:
+                            a2a_latencies.append(latency)
+                    
+                    # NPL API call metrics
+                    if event_type == 'npl_api':
+                        npl_calls_total += 1
+                        action = event.get('action', 'unknown')
+                        npl_by_action[action] += 1
+                        response_time = details.get('response_time_ms', 0)
                         if response_time > 0:
+                            npl_latencies.append(response_time)
                             latencies['npl_api_latency'].append(response_time)
                     
+                    # Agent action metrics (count as NPL tool calls)
+                    if event_type == 'agent_action':
+                        action = event.get('action', 'unknown')
+                        if 'npl_' in action:
+                            npl_calls_total += 1
+                            npl_by_action[action] += 1
+                    
                     # Track errors
-                    if level in ['error', 'warning'] or event.get('details', {}).get('outcome') == 'blocked_by_npl':
+                    if level in ['error', 'warning'] or details.get('outcome') == 'blocked_by_npl':
                         recent_errors.append({
                             'timestamp': event.get('timestamp', ''),
                             'type': event_type,
@@ -356,10 +403,39 @@ async def get_metrics_summary() -> Dict[str, Any]:
                     }
                 }
         
+        # Build enhanced metrics
+        llm_calls = None
+        if llm_calls_total > 0:
+            llm_calls = {
+                "total": llm_calls_total,
+                "by_agent": dict(llm_calls_by_agent),
+                "avg_latency_ms": sum(llm_latencies) / len(llm_latencies) if llm_latencies else 0,
+                "total_latency_ms": sum(llm_latencies)
+            }
+        
+        a2a_transfers = None
+        if a2a_transfers_total > 0:
+            a2a_transfers = {
+                "total": a2a_transfers_total,
+                "by_agent": dict(a2a_by_agent),
+                "avg_latency_ms": sum(a2a_latencies) / len(a2a_latencies) if a2a_latencies else 0
+            }
+        
+        npl_calls = None
+        if npl_calls_total > 0:
+            npl_calls = {
+                "total": npl_calls_total,
+                "by_action": dict(npl_by_action),
+                "avg_latency_ms": sum(npl_latencies) / len(npl_latencies) if npl_latencies else 0
+            }
+        
         return {
             "counters": {k: dict(v) for k, v in counters.items()},
             "latencies": latency_stats,
             "recent_errors": recent_errors[-20:],  # Last 20 errors
+            "llm_calls": llm_calls,
+            "a2a_transfers": a2a_transfers,
+            "npl_calls": npl_calls,
             "timestamp": datetime.now().isoformat()
         }
     except Exception as e:

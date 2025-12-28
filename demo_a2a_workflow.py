@@ -337,7 +337,7 @@ async def main():
         return (datetime.now(timezone.utc) + timedelta(days=offset_days)).isoformat().replace("+00:00", "Z")
     
     async def run_agent_turn(runner, prompt, user_id, session_id, agent_name, step_name):
-        """Run a single agent turn and log all events."""
+        """Run a single agent turn and log all events including LLM calls."""
         activity_logger.log_agent_message(
             from_agent="system",
             to_agent=agent_name,
@@ -348,8 +348,12 @@ async def main():
         response_parts = []
         tool_calls = []
         tool_results = {}
+        llm_call_count = 0
         
         content = types.Content(role="user", parts=[types.Part(text=prompt)])
+        
+        # Track LLM call timing
+        turn_start = time.time()
         
         async for event in runner.run_async(
             new_message=content,
@@ -357,6 +361,10 @@ async def main():
             session_id=session_id
         ):
             if hasattr(event, "content") and hasattr(event.content, "parts"):
+                # Each content event represents an LLM response
+                llm_call_count += 1
+                call_time = (time.time() - turn_start) * 1000  # ms
+                
                 for part in event.content.parts:
                     if hasattr(part, "text") and part.text:
                         response_parts.append(part.text)
@@ -371,12 +379,13 @@ async def main():
                         tool_calls.append(func.name)
                         print(f"   🔧 Tool: {func.name}")
                         if "transfer" in func.name.lower():
-                            activity_logger.log_event(
-                                event_type="a2a_transfer",
-                                actor=agent_name,
-                                action="a2a_delegation",
-                                details={"tool": func.name},
-                                level="info"
+                            # Log A2A transfer with timing
+                            activity_logger.log_a2a_transfer(
+                                from_agent=agent_name,
+                                to_agent="remote_agent",
+                                task=step_name,
+                                success=True,
+                                latency_ms=call_time
                             )
                         else:
                             activity_logger.log_agent_action(
@@ -400,6 +409,18 @@ async def main():
                                 details={"tool": name},
                                 level="info"
                             )
+        
+        # Log LLM usage for this turn
+        total_time = (time.time() - turn_start) * 1000
+        activity_logger.log_llm_call(
+            model="gemini-2.0-flash",
+            agent=agent_name,
+            latency_ms=total_time,
+            success=True,
+            step=step_name,
+            tool_calls=len(tool_calls),
+            llm_rounds=llm_call_count
+        )
         
         full_text = "".join(response_parts).strip()
         
