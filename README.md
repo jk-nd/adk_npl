@@ -11,6 +11,9 @@ This project demonstrates how AI agents can autonomously initiate business trans
 - ✅ **Human-in-the-Loop** - High-value orders require human approval before execution
 - ✅ **Fully Auditable** - Complete audit trail of all state transitions and approvals
 - ✅ **Safe by Design** - System remains correct even if LLM hallucinates or skips steps
+- ✅ **Resilient Error Handling** - Automatic retries with exponential backoff, token refresh
+- ✅ **Monitoring & Observability** - Metrics collection, structured logging, health checks
+- ✅ **Comprehensive Testing** - Edge case tests, integration tests, monitoring tests
 
 ## Architecture
 
@@ -204,11 +207,14 @@ This project uses **explicit party binding** with `@parties` at protocol creatio
 adk-demo/
 ├── adk_npl/                    # ADK-NPL integration library
 │   ├── config.py               # Configuration management
-│   ├── client.py               # NPL Engine client
-│   ├── auth.py                 # Keycloak authentication
+│   ├── client.py               # NPL Engine client (with retry logic)
+│   ├── auth.py                 # Keycloak authentication (with token refresh)
 │   ├── discovery.py            # Package discovery from Swagger
 │   ├── tools.py                # Dynamic ADK tool generation
-│   └── agent_builder.py        # Convenience agent creation
+│   ├── agent_builder.py        # Convenience agent creation
+│   ├── monitoring.py           # Metrics, logging, health checks
+│   ├── retry.py                # Retry utilities with exponential backoff
+│   └── utils.py                # Error classes and utilities
 │
 ├── purchasing_agent/           # Purchasing agent (buyer side)
 │   └── agent.py                # ADK agent with business logic
@@ -221,8 +227,12 @@ adk-demo/
 │   └── supplier/agent.py       # Supplier agent for adk web
 │
 ├── tests/                      # Integration tests
+│   ├── conftest.py             # Shared pytest fixtures
+│   ├── test_utils.py           # Test utilities and helpers
 │   ├── test_commerce_product.py  # Product creation test
-│   └── test_commerce_flow.py     # Full commerce flow test
+│   ├── test_commerce_flow.py     # Full commerce flow test
+│   ├── test_error_handling.py    # Error handling and retry tests
+│   └── test_monitoring.py        # Monitoring and metrics tests
 │
 ├── npl/                        # NPL source code
 │   └── src/main/
@@ -324,6 +334,9 @@ Both agents have:
 - **Self-Documenting Tools**: LLMs see exact parameter signatures (not opaque `**kwargs`)
 - **Multi-Realm Auth**: Supports federated identity with multiple Keycloak realms
 - **Caching**: Efficient caching of discovered packages and tools
+- **Resilient Error Handling**: Automatic retries with exponential backoff, token refresh on expiry
+- **Monitoring & Observability**: Built-in metrics collection, structured logging, health checks
+- **Production Ready**: Comprehensive error handling, retry logic, and observability tools
 
 ## Approval Workflow Demo
 
@@ -431,6 +444,97 @@ docker-compose restart engine
 ```bash
 docker-compose down -v
 ./scripts/setup-fresh.sh
+```
+
+## Error Handling & Resilience
+
+The ADK-NPL integration includes robust error handling:
+
+- **Automatic Retries**: Transient failures (5xx, 429, network errors) are automatically retried with exponential backoff
+- **Token Refresh**: Expired JWT tokens are automatically refreshed using refresh tokens
+- **Detailed Error Messages**: Errors include status codes, URLs, and response bodies for debugging
+- **Configurable Timeouts**: Set request timeouts per client instance
+- **Graceful Degradation**: Connection errors and timeouts are handled gracefully
+
+### Example: Using Retry Logic
+
+```python
+from adk_npl import NPLClient
+
+# Client with custom retry configuration
+client = NPLClient(
+    base_url="http://localhost:12000",
+    auth_token="token",
+    max_retries=3,        # Retry up to 3 times
+    timeout=30.0          # 30 second timeout
+)
+
+# Automatic retries on transient failures
+try:
+    result = client.create_protocol(...)
+except NPLClientError as e:
+    # Detailed error information available
+    print(f"Error: {e.message}")
+    print(f"Status: {e.status_code}")
+    print(f"URL: {e.url}")
+```
+
+## Monitoring & Observability
+
+Built-in monitoring tools for production use:
+
+- **Metrics Collection**: Automatic tracking of API calls, latency, errors
+- **Structured Logging**: Optional JSON-formatted logs for log aggregation systems
+- **Health Checks**: Utilities to check NPL Engine health and authentication status
+
+### Example: Using Metrics
+
+```python
+from adk_npl import get_metrics, HealthCheck, NPLClient
+
+# Get metrics summary
+metrics = get_metrics()
+summary = metrics.get_summary()
+print(f"API calls: {summary['counters']}")
+print(f"Recent errors: {summary['recent_errors']}")
+
+# Check system health
+client = NPLClient(base_url="http://localhost:12000")
+health = HealthCheck(client).get_full_health()
+print(f"Engine status: {health['engine']['status']}")
+print(f"Auth status: {health['authentication']['status']}")
+```
+
+### Example: Structured Logging
+
+```python
+from adk_npl import StructuredLogger
+
+# JSON-formatted logging for log aggregation
+logger = StructuredLogger("my_app", use_json=True)
+logger.info("API call completed", endpoint="/npl/commerce/Product", latency=0.123)
+```
+
+## Testing
+
+Comprehensive test suite covering:
+
+- **Error Handling**: Retry logic, token refresh, error messages, graceful degradation
+- **Monitoring**: Metrics collection, structured logging, health checks
+- **Integration Tests**: Full commerce workflow tests
+
+### Running Tests
+
+```bash
+# Run all tests
+pytest tests/
+
+# Run specific test suites
+pytest tests/test_error_handling.py -v
+pytest tests/test_monitoring.py -v
+
+# Run integration tests (requires running services)
+pytest tests/ -m integration -v
 ```
 
 ## Documentation

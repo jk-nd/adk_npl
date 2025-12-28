@@ -56,6 +56,8 @@ class KeycloakAuth(AuthStrategy):
         self.username = username
         self.password = password
         self.client_id = client_id
+        self._refresh_token: Optional[str] = None
+        self._access_token: Optional[str] = None
     
     async def authenticate(self) -> str:
         """
@@ -97,6 +99,11 @@ class KeycloakAuth(AuthStrategy):
             
             token_data = response.json()
             token = token_data["access_token"]
+            self._access_token = token
+            
+            # Store refresh token if provided
+            if "refresh_token" in token_data:
+                self._refresh_token = token_data["refresh_token"]
             
             logger.info("Authentication successful")
             return token
@@ -112,6 +119,69 @@ class KeycloakAuth(AuthStrategy):
             
             logger.error(error_msg)
             raise AuthenticationError(error_msg) from e
+    
+    async def refresh_token(self) -> str:
+        """
+        Refresh access token using refresh token.
+        
+        Returns:
+            New JWT access token
+            
+        Raises:
+            AuthenticationError: If refresh fails
+        """
+        if not self._refresh_token:
+            # Fall back to full authentication
+            logger.info("No refresh token available, performing full authentication")
+            return await self.authenticate()
+        
+        logger.info("Refreshing access token")
+        
+        token_url = f"{self.keycloak_url}/realms/{self.realm}/protocol/openid-connect/token"
+        
+        payload = {
+            "grant_type": "refresh_token",
+            "refresh_token": self._refresh_token,
+            "client_id": self.client_id
+        }
+        
+        request_headers = {"Content-Type": "application/x-www-form-urlencoded"}
+        if "localhost:11000" in self.keycloak_url:
+            request_headers["Host"] = "keycloak:11000"
+        
+        try:
+            response = requests.post(
+                token_url,
+                data=payload,
+                headers=request_headers
+            )
+            response.raise_for_status()
+            
+            token_data = response.json()
+            token = token_data["access_token"]
+            self._access_token = token
+            
+            # Update refresh token if provided
+            if "refresh_token" in token_data:
+                self._refresh_token = token_data["refresh_token"]
+            
+            logger.info("Token refresh successful")
+            return token
+            
+        except requests.exceptions.RequestException as e:
+            error_msg = f"Token refresh failed: {e}"
+            if hasattr(e, 'response') and e.response is not None:
+                try:
+                    error_detail = e.response.json()
+                    error_msg += f" - {error_detail}"
+                except:
+                    error_msg += f" - Status: {e.response.status_code}"
+            
+            logger.warning(f"{error_msg}. Falling back to full authentication")
+            # Clear invalid refresh token
+            self._refresh_token = None
+            # Fall back to full authentication
+            return await self.authenticate()
 
 
 class TokenAuth(AuthStrategy):

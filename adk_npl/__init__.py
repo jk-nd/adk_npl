@@ -18,7 +18,16 @@ from .utils import (
     NPLIntegrationError,
     AuthenticationError,
     ToolDiscoveryError,
-    PackageDiscoveryError
+    PackageDiscoveryError,
+    NPLClientError,
+    TokenExpiredError,
+    ServiceUnavailableError
+)
+from .monitoring import (
+    StructuredLogger,
+    MetricsCollector,
+    HealthCheck,
+    get_metrics
 )
 
 __version__ = "0.1.0"
@@ -51,5 +60,14 @@ __all__ = [
     "AuthenticationError",
     "ToolDiscoveryError",
     "PackageDiscoveryError",
+    "NPLClientError",
+    "TokenExpiredError",
+    "ServiceUnavailableError",
+    
+    # Monitoring
+    "StructuredLogger",
+    "MetricsCollector",
+    "HealthCheck",
+    "get_metrics",
 ]
 

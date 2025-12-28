@@ -9,9 +9,11 @@ This library enables ADK agents to **dynamically discover and use NPL protocols 
 - 🔍 **Automatic Package Discovery** - Discovers NPL packages from Swagger UI
 - 🛠️ **Schema-Aware Tool Generation** - Generates tools with explicit typed parameters from OpenAPI schemas
 - 📝 **Self-Documenting Tools** - LLMs see exact parameter signatures (not `**kwargs`)
-- 🔐 **Authentication Support** - Keycloak OAuth2 and token authentication
+- 🔐 **Authentication Support** - Keycloak OAuth2 and token authentication with automatic refresh
 - ⚡ **Caching** - Efficient caching of OpenAPI specs and generated tools
 - 🎯 **Simple API** - One-line integration: `create_agent_with_npl()`
+- 🔄 **Resilient Error Handling** - Automatic retries with exponential backoff, token refresh
+- 📊 **Monitoring & Observability** - Built-in metrics, structured logging, health checks
 
 ## Installation
 
@@ -289,16 +291,21 @@ config = NPLConfig(
 )
 ```
 
-## Error Handling
+## Error Handling & Resilience
 
-The library provides specific error classes:
+The library provides robust error handling with automatic retries and token refresh:
+
+### Error Classes
 
 ```python
 from adk_npl import (
     NPLIntegrationError,
     AuthenticationError,
     ToolDiscoveryError,
-    PackageDiscoveryError
+    PackageDiscoveryError,
+    NPLClientError,
+    TokenExpiredError,
+    ServiceUnavailableError
 )
 
 try:
@@ -309,6 +316,100 @@ except PackageDiscoveryError as e:
     print(f"Could not discover packages: {e}")
 except ToolDiscoveryError as e:
     print(f"Tool generation failed: {e}")
+except NPLClientError as e:
+    print(f"API error: {e.message}")
+    print(f"Status: {e.status_code}, URL: {e.url}")
+```
+
+### Automatic Retries
+
+The `NPLClient` automatically retries transient failures (5xx errors, 429 rate limits, network errors) with exponential backoff:
+
+```python
+from adk_npl import NPLClient
+
+client = NPLClient(
+    base_url="http://localhost:12000",
+    auth_token="token",
+    max_retries=3,        # Retry up to 3 times
+    timeout=30.0          # 30 second timeout per request
+)
+```
+
+### Token Refresh
+
+Tokens are automatically refreshed when expired:
+
+```python
+from adk_npl import NPLClient, NPLToolRegistry
+
+# Token refresh is handled automatically by NPLToolRegistry
+registry = NPLToolRegistry(config)
+await registry.authenticate()  # Initial authentication
+
+# If token expires, it will be automatically refreshed on next API call
+tools = await registry.discover_tools()
+```
+
+## Monitoring & Observability
+
+Built-in monitoring tools for production use:
+
+### Metrics Collection
+
+```python
+from adk_npl import get_metrics
+
+# Get global metrics instance
+metrics = get_metrics()
+
+# View metrics summary
+summary = metrics.get_summary()
+print(f"API calls: {summary['counters']}")
+print(f"Recent errors: {summary['recent_errors']}")
+
+# Get latency statistics
+latency_stats = metrics.get_latency_stats("npl.api.latency", method="GET")
+if latency_stats:
+    print(f"Avg latency: {latency_stats['avg']:.3f}s")
+    print(f"P95 latency: {latency_stats['p95']:.3f}s")
+```
+
+### Structured Logging
+
+```python
+from adk_npl import StructuredLogger
+
+# Plain text logging (default)
+logger = StructuredLogger("my_app", use_json=False)
+logger.info("API call completed", endpoint="/npl/commerce/Product")
+
+# JSON-formatted logging for log aggregation systems
+json_logger = StructuredLogger("my_app", use_json=True)
+json_logger.info("API call completed", endpoint="/npl/commerce/Product", latency=0.123)
+# Output: {"timestamp": "2025-12-28T...", "level": "INFO", "message": "...", ...}
+```
+
+### Health Checks
+
+```python
+from adk_npl import HealthCheck, NPLClient
+
+client = NPLClient(base_url="http://localhost:12000", auth_token="token")
+health_check = HealthCheck(client)
+
+# Check engine health
+engine_health = health_check.check_engine_health()
+print(f"Engine status: {engine_health['status']}")
+print(f"Latency: {engine_health.get('latency_seconds', 0):.3f}s")
+
+# Check authentication
+auth_status = health_check.check_authentication()
+print(f"Authenticated: {auth_status['authenticated']}")
+
+# Get full health status
+full_health = health_check.get_full_health()
+# Includes: engine, authentication, metrics summary
 ```
 
 ## Troubleshooting
@@ -330,6 +431,27 @@ except ToolDiscoveryError as e:
 1. Check that packages contain protocols with actions
 2. Verify OpenAPI specs are accessible
 3. Check authentication is working (some endpoints require auth)
+
+### "Request failed after X attempts"
+
+This indicates retries were exhausted. Check:
+1. NPL Engine is running and accessible
+2. Network connectivity is stable
+3. Authentication token is valid (check token refresh callback is configured)
+4. Increase `max_retries` if needed for unstable networks
+
+### Monitoring Metrics
+
+To view collected metrics:
+
+```python
+from adk_npl import get_metrics
+
+metrics = get_metrics()
+print(metrics.get_summary())
+```
+
+Metrics are automatically collected for all API calls made through `NPLClient`.
 
 ## License
 
