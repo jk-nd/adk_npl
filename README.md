@@ -151,10 +151,33 @@ python demo_approval_workflow.py
 8. **Buyer agent retries** `placeOrder` → SUCCESS
 9. **Supplier agent** ships order → Complete audit trail
 
-**Alternative:** For a basic agent negotiation simulation:
+**Alternative demos:**
+
 ```bash
+# Basic orchestrated negotiation
 python simulate_negotiation.py
+
+# True A2A (Agent-to-Agent) with HTTP protocol
+python demo_a2a_workflow.py
 ```
+
+### A2A Demo (`demo_a2a_workflow.py`)
+
+Demonstrates true agent-to-agent communication using Google ADK's A2A HTTP protocol:
+
+```
+┌─────────────────┐    A2A HTTP     ┌─────────────────┐
+│  Buyer Agent    │◄───────────────►│ Supplier Agent  │
+│  (Port 8010)    │                 │  (Port 8011)    │
+└────────┬────────┘                 └────────┬────────┘
+         │                                   │
+         └───────────► NPL Engine ◄──────────┘
+```
+
+- Buyer and Supplier run as **separate HTTP servers**
+- Communication via **A2A protocol** (not script orchestration)
+- NPL tools work within A2A context for governance
+- Full message exchange visible in logs
 
 *Note: These scripts run multiple LLM requests. If using a free tier Gemini API key, you may hit rate limits (429).*
 
