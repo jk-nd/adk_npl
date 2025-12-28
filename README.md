@@ -6,15 +6,15 @@ This project demonstrates how AI agents can autonomously initiate business trans
 
 ## Key Features
 
-- ✅ **Agents Initiate Actions** - LLMs autonomously propose and execute business operations
+- ✅ **LLM-Driven Workflow** - Agents use dynamically generated NPL tools via ADK Runners
 - ✅ **Policies Enforced Outside LLM** - NPL state machine blocks invalid transitions
 - ✅ **Human-in-the-Loop** - High-value orders require human approval before execution
 - ✅ **Fully Auditable** - Complete audit trail of all state transitions and approvals
 - ✅ **Safe by Design** - System remains correct even if LLM hallucinates or skips steps
+- ✅ **Transparent Agent Reasoning** - All LLM tool calls and responses are captured
 - ✅ **Resilient Error Handling** - Automatic retries with exponential backoff, token refresh
 - ✅ **Monitoring & Observability** - Metrics collection, structured logging, health checks
-- ✅ **Comprehensive Testing** - Edge case tests, integration tests, monitoring tests
-- ✅ **Activity Logging** - Real-time tracking of all agent actions, API calls, and state transitions
+- ✅ **Activity Logging** - Real-time tracking of agent reasoning, tool calls, and state transitions
 
 ## Architecture
 
@@ -67,8 +67,8 @@ cp .env.example .env
 # Activate Python environment
 source .venv/bin/activate
 
-# Install dependencies (including nest_asyncio)
-pip install -r adk_npl/requirements.txt
+# Install all dependencies
+pip install -r requirements.txt
 ```
 
 ### 2. Start Services (Fresh)
@@ -124,28 +124,34 @@ npx openapi-typescript openapi/commerce-openapi.json -o ./src/clients/commerce/t
 
 ### 5. Run Approval Workflow Demo
 
-The main demo showcases the end-to-end approval workflow for high-value purchases:
+The main demo showcases the end-to-end approval workflow with **LLM agents driving the workflow** via dynamically generated NPL tools:
 
 ```bash
 python demo_approval_workflow.py
 ```
 
-This demonstrates:
-1. Product and Offer creation by supplier
-2. Offer acceptance by buyer
-3. PurchaseOrder creation (high value, triggers approval requirement)
-4. Supplier submits quote
-5. **Buyer agent attempts to place order → BLOCKED by NPL**
-6. **MANUAL STEP: Script pauses and waits for human approval via UI**
+**How it works:**
+- Buyer and Supplier agents are ADK `LlmAgent` instances with NPL tools
+- Agents call `npl_commerce_*` tools (e.g., `npl_commerce_Product_create`) autonomously
+- All agent reasoning and tool calls are captured in the Activity Log
+- State verification ensures actions actually completed
+
+**Demo flow:**
+1. **Supplier agent** calls `npl_commerce_Product_create` tool → Product created
+2. **Supplier agent** calls `npl_commerce_Offer_create` + `publish` tools → Offer published
+3. **Buyer agent** calls `npl_commerce_Offer_accept` → Offer accepted
+4. **Buyer agent** calls `npl_commerce_PurchaseOrder_create` → High-value order triggers approval
+5. **Supplier agent** submits quote → State: `ApprovalRequired`
+6. **Buyer agent attempts** `placeOrder` → **BLOCKED by NPL** (ApprovalRequired state)
+7. **MANUAL STEP:** Human approves via UI:
    - Open http://localhost:5173
    - Log in as `approver` / `Welcome123` (realm: `purchasing`)
-   - Navigate to "APPROVALS" tab
-   - Click "APPROVE" on the pending order
-   - Script automatically detects approval and continues
-7. Buyer agent retries → SUCCESS
-8. Order shipped and complete audit trail retrieved
+   - Navigate to "APPROVALS" tab and click "APPROVE"
+   - Script detects approval and continues
+8. **Buyer agent retries** `placeOrder` → SUCCESS
+9. **Supplier agent** ships order → Complete audit trail
 
-**Alternative:** For a basic agent negotiation simulation (without approval workflow):
+**Alternative:** For a basic agent negotiation simulation:
 ```bash
 python simulate_negotiation.py
 ```
@@ -402,28 +408,44 @@ Both agents have:
 
 ## Approval Workflow Demo
 
-The `demo_approval_workflow.py` script demonstrates the complete PoC workflow:
+The `demo_approval_workflow.py` script demonstrates **LLM agents driving a complete business workflow** with NPL governance:
+
+### Architecture
+
+```
+┌─────────────────┐     ADK Runner      ┌─────────────────┐
+│  Buyer Agent    │◄──────────────────►│  NPL Engine     │
+│  (LlmAgent)     │  npl_commerce_*    │  (State Machine)│
+└─────────────────┘     tools           └─────────────────┘
+         │                                       │
+         │                                       │
+         ▼                                       ▼
+┌─────────────────┐                    ┌─────────────────┐
+│ Activity Logger │                    │  Human Approver │
+│ (reasoning +    │                    │  (via UI)       │
+│  tool calls)    │                    └─────────────────┘
+└─────────────────┘
+```
 
 ### Flow
 
-1. **Supplier Agent** creates a Product (Industrial Pump)
-2. **Supplier Agent** creates and publishes an Offer
-3. **Buyer Agent** accepts the Offer
-4. **System** creates a PurchaseOrder with high value ($12,000 > $5,000 threshold)
-5. **Supplier Agent** submits a quote → Order transitions to `ApprovalRequired`
-6. **Buyer Agent** attempts to place order → **❌ NPL BLOCKS** with `IllegalProtocolStateRuntimeErrorException`
-7. **Human Approver** (Alice) approves via `approve` action → Order transitions to `Approved`
-8. **Buyer Agent** retries place order → **✅ SUCCESS** → Order transitions to `Ordered`
-9. **Supplier Agent** ships the order
-10. **System** retrieves complete audit trail
+1. **Supplier Agent** calls `npl_commerce_Product_create` → Product created
+2. **Supplier Agent** calls `npl_commerce_Offer_create`, `publish` → Offer published  
+3. **Buyer Agent** calls `npl_commerce_Offer_accept` → Offer accepted
+4. **Buyer Agent** calls `npl_commerce_PurchaseOrder_create` → PurchaseOrder ($12,000)
+5. **Supplier Agent** calls `submitQuote` → State: `ApprovalRequired`
+6. **Buyer Agent** calls `placeOrder` → **❌ NPL BLOCKS** (wrong state)
+7. **Human Approver** approves via UI → State: `Approved`
+8. **Buyer Agent** calls `placeOrder` → **✅ SUCCESS** → State: `Ordered`
+9. **Supplier Agent** calls `shipOrder` → Complete
 
-### Why This Works
+### What Makes This Special
 
-- **LLM suggests**, NPL decides - Agent cannot bypass policy
-- **State machine enforcement** - Invalid transitions are rejected
-- **Role-based authorization** - Only users with `approver` role can approve
-- **Auditability** - Every action is logged with timestamp and actor
-- **Resilience** - Works even if LLM hallucinates or attempts forbidden actions
+- **Agents call NPL tools directly** - No hardcoded API calls in the script
+- **Full transparency** - All agent reasoning and tool calls captured in Activity Log
+- **State verification** - Each action verified against NPL state machine
+- **LLM suggests, NPL decides** - Agent cannot bypass policy
+- **Resilience** - Works even if LLM hallucinates or skips steps
 
 ## NPL Protocols
 
