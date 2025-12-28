@@ -486,7 +486,7 @@ Report the product ID after creation.
     if not product_id:
         print("   ⚠️  Could not extract product ID from agent, using fallback...")
         supplier_client = await get_authenticated_client("supplier", "supplier_agent")
-        product_result = supplier_client.create_instance(
+        product_result = supplier_client.create_protocol(
             package="commerce",
             protocol_name="Product",
             params={
@@ -547,7 +547,7 @@ Report the offer ID.
         print("   ⚠️  Could not extract offer ID, using fallback...")
         if not supplier_client:
             supplier_client = await get_authenticated_client("supplier", "supplier_agent")
-        offer_result = supplier_client.create_instance(
+        offer_result = supplier_client.create_protocol(
             package="commerce",
             protocol_name="Offer",
             params={
@@ -696,7 +696,7 @@ Report the PurchaseOrder ID.
     
     if not po_id:
         print("   ⚠️  Could not extract PO ID, using fallback...")
-        po_result = buyer_client.create_instance(
+        po_result = buyer_client.create_protocol(
             package="commerce",
             protocol_name="PurchaseOrder",
             params={
