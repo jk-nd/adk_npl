@@ -8,7 +8,7 @@ import { ReactKeycloakProvider } from '@react-keycloak/web';
 import { useState } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import keycloak from './keycloak';
-import { ThemeProvider } from './contexts/ThemeContext';
+import { ThemeProvider, useTheme } from './contexts/ThemeContext';
 import ApprovalDashboard from './components/ApprovalDashboard';
 import { ActivityLog } from './components/ActivityLog';
 import { MetricsDashboard } from './components/MetricsDashboard';
@@ -25,22 +25,34 @@ const queryClient = new QueryClient({
   },
 });
 
-function App() {
+function ThemeToggle() {
+  const { theme, toggleTheme } = useTheme();
+  return (
+    <button
+      className="theme-toggle"
+      onClick={toggleTheme}
+      title={`Switch to ${theme === 'dark' ? 'light' : 'dark'} mode`}
+    >
+      {theme === 'dark' ? '☀' : '☽'}
+    </button>
+  );
+}
+
+function AppContent() {
   const [activeTab, setActiveTab] = useState<Tab>('approvals');
 
   return (
-    <QueryClientProvider client={queryClient}>
-      <ThemeProvider>
-        <ReactKeycloakProvider
-        authClient={keycloak}
-        initOptions={{
-          onLoad: 'check-sso', // Changed from 'login-required' to allow login button
-          checkLoginIframe: false,
-        }}
-        LoadingComponent={<div style={{ padding: '20px' }}>Authenticating...</div>}
-      >
-        <div className="app-container">
-          <nav className="app-tabs">
+    <ReactKeycloakProvider
+      authClient={keycloak}
+      initOptions={{
+        onLoad: 'check-sso',
+        checkLoginIframe: false,
+      }}
+      LoadingComponent={<div style={{ padding: '20px' }}>Authenticating...</div>}
+    >
+      <div className="app-container">
+        <nav className="app-tabs">
+          <div className="tab-buttons">
             <button
               className={`tab-button ${activeTab === 'approvals' ? 'active' : ''}`}
               onClick={() => setActiveTab('approvals')}
@@ -62,15 +74,25 @@ function App() {
               <span className="tab-icon icon-chart">▪</span>
               <span className="tab-label">Metrics</span>
             </button>
-          </nav>
-          <div className="tab-content">
-            {activeTab === 'approvals' && <ApprovalDashboard />}
-            {activeTab === 'activity' && <ActivityLog />}
-            {activeTab === 'metrics' && <MetricsDashboard />}
           </div>
+          <ThemeToggle />
+        </nav>
+        <div className="tab-content">
+          {activeTab === 'approvals' && <ApprovalDashboard />}
+          {activeTab === 'activity' && <ActivityLog />}
+          {activeTab === 'metrics' && <MetricsDashboard />}
         </div>
-      </ReactKeycloakProvider>
-    </ThemeProvider>
+      </div>
+    </ReactKeycloakProvider>
+  );
+}
+
+function App() {
+  return (
+    <QueryClientProvider client={queryClient}>
+      <ThemeProvider>
+        <AppContent />
+      </ThemeProvider>
     </QueryClientProvider>
   );
 }
