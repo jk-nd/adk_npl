@@ -14,6 +14,7 @@ This project demonstrates how AI agents can autonomously initiate business trans
 - ✅ **Resilient Error Handling** - Automatic retries with exponential backoff, token refresh
 - ✅ **Monitoring & Observability** - Metrics collection, structured logging, health checks
 - ✅ **Comprehensive Testing** - Edge case tests, integration tests, monitoring tests
+- ✅ **Activity Logging** - Real-time tracking of all agent actions, API calls, and state transitions
 
 ## Architecture
 
@@ -143,7 +144,47 @@ python simulate_negotiation.py
 
 *Note: These scripts run multiple LLM requests. If using a free tier Gemini API key, you may hit rate limits (429).*
 
-### 5. Troubleshooting
+### 6. Activity Logging & Monitoring
+
+Track all agent actions, API calls, and state transitions in real-time:
+
+```bash
+# Start the Activity Feed API
+cd activity_api
+source ../.venv/bin/activate
+python3 main.py
+# API runs on http://localhost:8002
+
+# Run the demo (generates activity logs)
+cd ..
+python demo_approval_workflow.py
+
+# View logs in the UI
+cd frontend
+npm run dev
+# Open http://localhost:5173
+# Click "Activity Log" or "Metrics" tabs
+```
+
+**Features:**
+- 📝 **Activity Log** - Real-time feed of all system events (agent actions, API calls, state transitions)
+- 📊 **Metrics Dashboard** - Performance metrics, latency percentiles, error tracking
+- 🎯 **Auto-refresh** - Live updates without manual refresh
+- 📁 **JSON Log Files** - Structured logs saved to `logs/activity_*.json`
+- 🔍 **Filtering** - Filter by event type or actor
+
+**View logs directly:**
+```bash
+# View latest log file
+cat logs/activity_latest.json | jq
+
+# Watch logs in real-time
+tail -f logs/activity_latest.json | jq
+```
+
+See [ACTIVITY_LOGGING.md](ACTIVITY_LOGGING.md) for detailed documentation.
+
+### 7. Troubleshooting
 
 If you encounter **429 Resource Exhausted** errors with Gemini models:
 - Ensure `GOOGLE_CLOUD_PROJECT` is set in `.env` if using a paid billing account.
@@ -159,6 +200,8 @@ If you see **ModuleNotFoundError: No module named 'adk_npl'**:
 |---------|------|-------------|
 | NPL Engine | 12000 | Protocol execution engine |
 | Keycloak | 11000 | Identity provider |
+| Activity API | 8002 | Activity logs and metrics REST API |
+| Frontend UI | 5173 | React approval dashboard (dev server) |
 | Engine DB | 5432 | PostgreSQL for NPL Engine |
 | Keycloak DB | 5439 | PostgreSQL for Keycloak |
 
@@ -213,8 +256,13 @@ adk-demo/
 │   ├── tools.py                # Dynamic ADK tool generation
 │   ├── agent_builder.py        # Convenience agent creation
 │   ├── monitoring.py           # Metrics, logging, health checks
+│   ├── activity_logger.py      # Activity logging (JSON logs + in-memory buffer)
 │   ├── retry.py                # Retry utilities with exponential backoff
 │   └── utils.py                # Error classes and utilities
+│
+├── activity_api/               # Activity Feed REST API
+│   ├── main.py                 # FastAPI server for logs and metrics
+│   └── requirements.txt        # API dependencies
 │
 ├── purchasing_agent/           # Purchasing agent (buyer side)
 │   └── agent.py                # ADK agent with business logic
@@ -244,12 +292,18 @@ adk-demo/
 ├── keycloak-provisioning/      # Terraform for Keycloak setup
 │   └── terraform.tf            # Realms, clients, users
 │
-├── frontend/                   # React + TypeScript approval dashboard
+├── frontend/                   # React + TypeScript UI
 │   ├── src/
-│   │   ├── components/         # ApprovalDashboard component
+│   │   ├── components/         # React components
+│   │   │   ├── ApprovalDashboard.tsx  # Human approval interface
+│   │   │   ├── ActivityLog.tsx        # Activity log viewer
+│   │   │   └── MetricsDashboard.tsx   # Metrics and performance
 │   │   ├── contexts/           # Theme context
 │   │   └── clients/            # Type-safe NPL API clients
 │   └── openapi/                # OpenAPI specs for type generation
+│
+├── logs/                       # Activity log files (JSON)
+│   └── activity_*.json         # Timestamped activity logs
 │
 ├── scripts/
 │   ├── setup-fresh.sh          # Complete clean setup

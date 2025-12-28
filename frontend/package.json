@@ -11,6 +11,7 @@
   },
   "dependencies": {
     "@react-keycloak/web": "^3.4.0",
+    "@tanstack/react-query": "^5.90.13",
     "keycloak-js": "^26.2.2",
     "openapi-fetch": "^0.15.0",
     "react": "^19.2.0",

@@ -262,3 +262,25 @@ def is_action_execution_path(path: str, package: str) -> bool:
     protocol, action = parse_openapi_path(path, package)
     return protocol is not None and action is not None
 
+
+def is_retryable_exception(e: Exception) -> bool:
+    """
+    Checks if an exception is transient and should trigger a retry.
+    
+    Args:
+        e: Exception to check
+        
+    Returns:
+        True if the exception is retryable (connection errors, timeouts, 5xx, 429)
+    """
+    import requests
+    
+    if isinstance(e, requests.exceptions.ConnectionError):
+        return True
+    if isinstance(e, requests.exceptions.Timeout):
+        return True
+    if isinstance(e, requests.exceptions.HTTPError):
+        # Retry on 5xx errors and 429 (Too Many Requests)
+        if e.response is not None and (500 <= e.response.status_code < 600 or e.response.status_code == 429):
+            return True
+    return False

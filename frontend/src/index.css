@@ -23,6 +23,16 @@
   --agent-meta-bg: rgba(255, 255, 255, 0.04);
   --agent-meta-border: rgba(255, 255, 255, 0.07);
   --agent-border: rgba(255, 255, 255, 0.10);
+  
+  /* Unified color variables */
+  --color-bg: var(--agent-bg);
+  --color-card: var(--agent-card-bg);
+  --color-border: var(--agent-border);
+  --color-text: var(--agent-fg);
+  --color-text-muted: var(--agent-muted);
+  --color-accent: #3b82f6;
+  --color-accent-rgb: 59, 130, 246;
+  
   color-scheme: dark;
   color: var(--agent-fg);
   background-color: var(--agent-bg);
@@ -42,6 +52,16 @@
   --agent-meta-bg: rgba(15, 23, 42, 0.04);
   --agent-meta-border: rgba(15, 23, 42, 0.10);
   --agent-border: rgba(15, 23, 42, 0.12);
+  
+  /* Unified color variables */
+  --color-bg: var(--agent-bg);
+  --color-card: var(--agent-card-bg);
+  --color-border: var(--agent-border);
+  --color-text: var(--agent-fg);
+  --color-text-muted: var(--agent-muted);
+  --color-accent: #2563eb;
+  --color-accent-rgb: 37, 99, 235;
+  
   color-scheme: light;
   color: var(--agent-fg);
   background-color: var(--agent-bg);
