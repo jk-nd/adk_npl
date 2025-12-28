@@ -110,6 +110,9 @@ Access at http://localhost:5173
 - ✅ **Direct NPL integration** - No backend proxy needed
 - ✅ **Keycloak authentication** - Built-in auth handling with login/logout
 - ✅ **Light/Dark theme toggle** - Modern UI with theme switching
+- ✅ **Approval Dashboard** - Human-in-the-loop approval interface
+- ✅ **Activity Log** - Real-time feed of all system events
+- ✅ **Metrics Dashboard** - Performance metrics and monitoring
 - ✅ **Always in sync** - Regenerate types when protocols change
 
 **To regenerate types after protocol changes:**
@@ -133,9 +136,14 @@ This demonstrates:
 3. PurchaseOrder creation (high value, triggers approval requirement)
 4. Supplier submits quote
 5. **Buyer agent attempts to place order → BLOCKED by NPL**
-6. Human approver approves the order
+6. **MANUAL STEP: Script pauses and waits for human approval via UI**
+   - Open http://localhost:5173
+   - Log in as `approver` / `Welcome123` (realm: `purchasing`)
+   - Navigate to "APPROVALS" tab
+   - Click "APPROVE" on the pending order
+   - Script automatically detects approval and continues
 7. Buyer agent retries → SUCCESS
-8. Complete audit trail with all state transitions
+8. Order shipped and complete audit trail retrieved
 
 **Alternative:** For a basic agent negotiation simulation (without approval workflow):
 ```bash
