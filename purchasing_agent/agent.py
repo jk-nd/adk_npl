@@ -361,8 +361,12 @@ Each tool has explicit typed parameters - check the tool's signature for require
 1. Use `propose_framework` to establish protocols
 2. Use `get_budget_status` to confirm capacity
 3. Evaluate offers with `evaluate_proposal`
-4. Accept offers with `npl_commerce_Offer_accept`
-5. Create purchase orders with `npl_commerce_PurchaseOrder_create`
+4. **Before accepting an offer**: Check its state using available NPL query tools
+   - Only accept offers in "published" state
+   - If an offer is "withdrawn", ask the supplier for a new offer ID
+   - Never try to accept withdrawn, expired, or rejected offers
+5. Accept offers with `npl_commerce_Offer_accept` (only if state is "published")
+6. Create purchase orders with `npl_commerce_PurchaseOrder_create`
 
 ## PurchaseOrder Actions (IMPORTANT)
 

@@ -336,6 +336,108 @@ async def main():
     def _iso_now(offset_days: int = 0) -> str:
         return (datetime.now(timezone.utc) + timedelta(days=offset_days)).isoformat().replace("+00:00", "Z")
     
+    async def run_autonomous_agent(
+        runner,
+        initial_objective: str,
+        user_id: str,
+        session_id: str,
+        agent_name: str,
+        check_condition: callable,
+        max_iterations: int = 10,
+        poll_interval: float = 3.0
+    ):
+        """
+        Run an agent autonomously - it monitors state and acts based on its objective.
+        The agent will check state, reason, and act until the condition is met.
+        
+        Args:
+            runner: ADK Runner for the agent
+            initial_objective: The agent's goal/objective (given once, not per-turn)
+            user_id: User ID for the agent
+            session_id: Session ID for the agent
+            agent_name: Name of the agent (for logging)
+            check_condition: Async function that returns True when agent's objective is complete
+            max_iterations: Maximum number of autonomous turns
+            poll_interval: Seconds between state checks
+        """
+        activity_logger.log_agent_message(
+            from_agent="system",
+            to_agent=agent_name,
+            message=f"Autonomous objective: {initial_objective}",
+            message_type="autonomous_mode"
+        )
+        
+        print(f"   🤖 {agent_name} running autonomously with objective...")
+        
+        for iteration in range(max_iterations):
+            # Check if condition is already met
+            if await check_condition():
+                print(f"   ✅ {agent_name} objective completed")
+                return True
+            
+            # Agent checks state and decides what to do
+            prompt = f"""
+{initial_objective}
+
+Current iteration: {iteration + 1}/{max_iterations}
+Check the current state and act if conditions are met. If the objective is already complete, confirm it.
+"""
+            
+            response_parts = []
+            tool_calls = []
+            turn_start = time.time()
+            
+            content = types.Content(role="user", parts=[types.Part(text=prompt)])
+            
+            async for event in runner.run_async(
+                new_message=content,
+                user_id=user_id,
+                session_id=session_id
+            ):
+                if hasattr(event, "content") and hasattr(event.content, "parts"):
+                    for part in event.content.parts:
+                        if hasattr(part, "text") and part.text:
+                            response_parts.append(part.text)
+                            activity_logger.log_agent_reasoning(
+                                actor=agent_name,
+                                reasoning=part.text,
+                                context={"iteration": iteration + 1, "autonomous": True}
+                            )
+                        if hasattr(part, "function_call") and part.function_call:
+                            func = part.function_call
+                            tool_calls.append(func.name)
+                            activity_logger.log_agent_action(
+                                agent=agent_name,
+                                action=func.name,
+                                protocol="autonomous",
+                                protocol_id=None,
+                                outcome="called"
+                            )
+            
+            # Log LLM call
+            total_time = (time.time() - turn_start) * 1000
+            activity_logger.log_llm_call(
+                model="gemini-2.0-flash",
+                agent=agent_name,
+                latency_ms=total_time,
+                success=True,
+                step="autonomous_iteration",
+                tool_calls=len(tool_calls),
+                iteration=iteration + 1
+            )
+            
+            # Check if condition is now met
+            if await check_condition():
+                print(f"   ✅ {agent_name} objective completed after {iteration + 1} iteration(s)")
+                return True
+            
+            # Wait before next check
+            if iteration < max_iterations - 1:
+                await asyncio.sleep(poll_interval)
+        
+        print(f"   ⚠️  {agent_name} reached max iterations without completing objective")
+        return False
+    
     async def run_agent_turn(runner, prompt, user_id, session_id, agent_name, step_name):
         """Run a single agent turn and log all events including LLM calls."""
         activity_logger.log_agent_message(
@@ -489,8 +591,15 @@ Report the product ID after creation.
         product_result = supplier_client.create_protocol(
             package="commerce",
             protocol_name="Product",
-            params={
-                "seller": {"organization": "Supplier Inc", "department": "Sales"},
+            parties={
+                "seller": {
+                    "claims": {
+                        "organization": ["Supplier Inc"],
+                        "department": ["Sales"]
+                    }
+                }
+            },
+            data={
                 "name": "Industrial Pump X",
                 "description": "High-performance industrial water pump",
                 "sku": "PUMP-X-A2A",
@@ -550,9 +659,21 @@ Report the offer ID.
         offer_result = supplier_client.create_protocol(
             package="commerce",
             protocol_name="Offer",
-            params={
-                "seller": {"organization": "Supplier Inc", "department": "Sales"},
-                "buyer": {"organization": "Acme Corp", "department": "Procurement"},
+            parties={
+                "seller": {
+                    "claims": {
+                        "organization": ["Supplier Inc"],
+                        "department": ["Sales"]
+                    }
+                },
+                "buyer": {
+                    "claims": {
+                        "organization": ["Acme Corp"],
+                        "department": ["Procurement"]
+                    }
+                }
+            },
+            data={
                 "itemOffered": product_id,
                 "priceSpecification": {
                     "price": 1200.0,
@@ -605,12 +726,17 @@ Report the offer ID.
 I want to purchase Industrial Pump X. I see offer {offer_id} is available at $1200/unit.
 
 Please contact the SupplierAgent to:
-1. Confirm the offer is still valid
+1. Confirm the offer is still valid (check its state first)
 2. Ask if there's a volume discount for 10 units
 3. Negotiate for a better price if possible
 
 Use the transfer_to_agent tool to communicate with SupplierAgent.
-After negotiation, accept the offer using npl_commerce_Offer_accept with party="buyer".
+
+IMPORTANT: Before accepting the offer:
+- Check the offer state using available NPL query tools
+- Only accept if the state is "published"
+- If the supplier created a new offer during negotiation, get the new offer ID
+- Accept the offer using npl_commerce_Offer_accept with party="buyer" and the correct offer ID
 """
     
     activity_logger.log_event(
@@ -635,16 +761,56 @@ After negotiation, accept the offer using npl_commerce_Offer_accept with party="
     )
     offer_state = offer_data.get("@state") or offer_data.get("state")
     
+    if offer_state == "withdrawn":
+        print(f"   ⚠️  Original offer was withdrawn during negotiation")
+        print(f"   ℹ️  Checking if supplier created a new offer...")
+        # Query for recent offers - the supplier may have created a new one
+        try:
+            # Try to find a newer offer for the same product
+            recent_offers = buyer_client.query_instances(
+                package="commerce",
+                protocol_name="Offer",
+                filters={"@state": "published"}
+            )
+            # Look for offers with the same product
+            product_id = offer_data.get("itemOffered", {}).get("@id") if isinstance(offer_data.get("itemOffered"), dict) else None
+            if product_id:
+                for new_offer in recent_offers:
+                    new_offer_product = new_offer.get("itemOffered", {}).get("@id") if isinstance(new_offer.get("itemOffered"), dict) else None
+                    if new_offer_product == product_id and new_offer.get("@id") != offer_id:
+                        new_offer_id = new_offer.get("@id")
+                        print(f"   ✅ Found new offer: {new_offer_id}, accepting it...")
+                        buyer_client.execute_action(
+                            package="commerce",
+                            protocol_name="Offer",
+                            instance_id=new_offer_id,
+                            action_name="accept",
+                            party="buyer",
+                            params={}
+                        )
+                        offer_id = new_offer_id  # Update for rest of workflow
+                        offer_state = "accepted"
+                        break
+        except Exception as e:
+            print(f"   ⚠️  Could not find new offer: {e}")
+    
     if offer_state != "accepted":
-        print(f"   ⚠️  Offer state: {offer_state}, accepting via fallback...")
-        buyer_client.execute_action(
-            package="commerce",
-            protocol_name="Offer",
-            instance_id=offer_id,
-            action_name="accept",
-            party="buyer",
-            params={}
-        )
+        if offer_state == "published":
+            print(f"   ⚠️  Offer state: {offer_state}, accepting via fallback...")
+            try:
+                buyer_client.execute_action(
+                    package="commerce",
+                    protocol_name="Offer",
+                    instance_id=offer_id,
+                    action_name="accept",
+                    party="buyer",
+                    params={}
+                )
+                offer_state = "accepted"
+            except Exception as e:
+                print(f"   ⚠️  Could not accept offer: {e}")
+        else:
+            print(f"   ⚠️  Offer state is {offer_state}, cannot accept. Agent should have handled this.")
     
     activity_logger.log_event(
         event_type="a2a_demo",
@@ -699,10 +865,27 @@ Report the PurchaseOrder ID.
         po_result = buyer_client.create_protocol(
             package="commerce",
             protocol_name="PurchaseOrder",
-            params={
-                "buyer": {"organization": "Acme Corp", "department": "Procurement"},
-                "seller": {"organization": "Supplier Inc", "department": "Sales"},
-                "approver": {"organization": "Acme Corp", "department": "Finance"},
+            parties={
+                "buyer": {
+                    "claims": {
+                        "organization": ["Acme Corp"],
+                        "department": ["Procurement"]
+                    }
+                },
+                "seller": {
+                    "claims": {
+                        "organization": ["Supplier Inc"],
+                        "department": ["Sales"]
+                    }
+                },
+                "approver": {
+                    "claims": {
+                        "organization": ["Acme Corp"],
+                        "department": ["Finance"]
+                    }
+                }
+            },
+            data={
                 "acceptedOffer": offer_id,
                 "orderNumber": order_number,
                 "quantity": quantity,
@@ -825,105 +1008,175 @@ This will trigger the approval workflow for the high-value order.
         return
     
     # =========================================================================
-    # STEP 7: Buyer places order
+    # STEP 7: Buyer agent runs autonomously - monitors and places order
     # =========================================================================
-    print("✅ Step 7: Buyer places order...")
+    print("✅ Step 7: Buyer agent running autonomously...")
     
-    place_prompt = f"""
-PurchaseOrder {po_id} has been approved. Place the order now.
+    # Give buyer agent its objective ONCE - it will monitor and act independently
+    buyer_objective = f"""
+You are responsible for PurchaseOrder {po_id}. Your ongoing objective:
+- Monitor the order state using available NPL query tools
+- When the state becomes "Approved", immediately place the order using npl_commerce_PurchaseOrder_placeOrder
+- Continue monitoring and acting autonomously until the order is placed
 
-Call npl_commerce_PurchaseOrder_placeOrder with:
-- instance_id: "{po_id}"
-- party: "buyer"
+The order ID is: {po_id}
+You are now in autonomous mode - check state and act when ready.
 """
-    await run_agent_turn(
-        buyer_runner, place_prompt, "buyer_user", "negotiation_session",
-        "buyer_agent", "place_order"
-    )
     
-    # Verify
-    order_data = buyer_client.get_instance(
-        package="commerce",
-        protocol_name="PurchaseOrder",
-        instance_id=po_id
-    )
-    current_state = order_data.get("@state") or order_data.get("state")
-    
-    if current_state != "Ordered":
-        print(f"   ⚠️  State: {current_state}, placing via fallback...")
-        buyer_client.execute_action(
+    # Define condition checker
+    async def buyer_condition_met():
+        order_data = buyer_client.get_instance(
             package="commerce",
             protocol_name="PurchaseOrder",
-            instance_id=po_id,
-            action_name="placeOrder",
-            party="buyer",
-            params={}
+            instance_id=po_id
         )
+        state = order_data.get("@state") or order_data.get("state")
+        if state == "Ordered":
+            activity_logger.log_state_transition(
+                protocol="PurchaseOrder",
+                protocol_id=po_id,
+                from_state="Approved",
+                to_state="Ordered",
+                triggered_by="buyer_agent"
+            )
+            return True
+        return False
     
-    activity_logger.log_state_transition(
-        protocol="PurchaseOrder",
-        protocol_id=po_id,
-        from_state="Approved",
-        to_state="Ordered",
-        triggered_by="buyer_agent"
+    # Run buyer agent autonomously - it monitors and acts
+    success = await run_autonomous_agent(
+        runner=buyer_runner,
+        initial_objective=buyer_objective,
+        user_id="buyer_user",
+        session_id="negotiation_session",
+        agent_name="buyer_agent",
+        check_condition=buyer_condition_met,
+        max_iterations=5,
+        poll_interval=2.0
     )
-    print("   ✅ Order placed")
+    
+    if success:
+        print("   ✅ Buyer agent autonomously placed the order")
+    else:
+        print("   ⚠️  Buyer agent did not complete objective, using fallback...")
+        order_data = buyer_client.get_instance(
+            package="commerce",
+            protocol_name="PurchaseOrder",
+            instance_id=po_id
+        )
+        current_state = order_data.get("@state") or order_data.get("state")
+        if current_state != "Ordered":
+            buyer_client.execute_action(
+                package="commerce",
+                protocol_name="PurchaseOrder",
+                instance_id=po_id,
+                action_name="placeOrder",
+                party="buyer",
+                params={}
+            )
+            activity_logger.log_state_transition(
+                protocol="PurchaseOrder",
+                protocol_id=po_id,
+                from_state="Approved",
+                to_state="Ordered",
+                triggered_by="system"
+            )
     print()
     
     # =========================================================================
-    # STEP 8: Supplier ships via A2A
+    # STEP 8: Supplier agent runs autonomously - monitors and ships
     # =========================================================================
-    print("📦 Step 8: Supplier ships order...")
+    print("📦 Step 8: Supplier agent running autonomously...")
     
-    tracking = f"TRACK-A2A-{datetime.now().strftime('%H%M%S')}"
-    
-    ship_prompt = f"""
-PurchaseOrder {po_id} has been placed. Ship the order now.
+    # Give supplier agent its objective ONCE - it will monitor and act independently
+    supplier_objective = f"""
+You are responsible for fulfilling PurchaseOrder {po_id}. Your ongoing objective:
+- Monitor the order state using available NPL query tools
+- When the state becomes "Ordered", immediately ship it using npl_commerce_PurchaseOrder_shipOrder
+- Generate a tracking number (format: TRACK-A2A-XXXXXX) and include it in the shipment
+- Continue monitoring and acting autonomously until the order is shipped
 
-Call npl_commerce_PurchaseOrder_shipOrder with:
-- instance_id: "{po_id}"
-- party: "seller"
-- tracking: "{tracking}"
+The order ID is: {po_id}
+You are now in autonomous mode - check state and act when ready.
 """
-    await run_agent_turn(
-        supplier_runner, ship_prompt, "supplier_user", "supplier_session",
-        "supplier_agent", "ship_order"
-    )
     
-    # Verify
-    order_data = buyer_client.get_instance(
-        package="commerce",
-        protocol_name="PurchaseOrder",
-        instance_id=po_id
-    )
-    current_state = order_data.get("@state") or order_data.get("state")
-    
-    if current_state != "Shipped":
-        print(f"   ⚠️  State: {current_state}, shipping via fallback...")
-        if not supplier_client:
-            supplier_client = await get_authenticated_client("supplier", "supplier_agent")
-        supplier_client.execute_action(
+    # Define condition checker
+    async def supplier_condition_met():
+        order_data = buyer_client.get_instance(
             package="commerce",
             protocol_name="PurchaseOrder",
-            instance_id=po_id,
-            action_name="shipOrder",
-            party="seller",
-            params={"tracking": tracking}
+            instance_id=po_id
         )
+        state = order_data.get("@state") or order_data.get("state")
+        if state == "Shipped":
+            activity_logger.log_state_transition(
+                protocol="PurchaseOrder",
+                protocol_id=po_id,
+                from_state="Ordered",
+                to_state="Shipped",
+                triggered_by="supplier_agent"
+            )
+            # Extract tracking
+            tracking_used = order_data.get("trackingNumber") or order_data.get("tracking")
+            if tracking_used:
+                print(f"   📦 Tracking: {tracking_used}")
+            return True
+        return False
     
-    activity_logger.log_state_transition(
-        protocol="PurchaseOrder",
-        protocol_id=po_id,
-        from_state="Ordered",
-        to_state="Shipped",
-        triggered_by="supplier_agent"
+    # Run supplier agent autonomously - it monitors and acts
+    success = await run_autonomous_agent(
+        runner=supplier_runner,
+        initial_objective=supplier_objective,
+        user_id="supplier_user",
+        session_id="supplier_session",
+        agent_name="supplier_agent",
+        check_condition=supplier_condition_met,
+        max_iterations=5,
+        poll_interval=2.0
     )
-    print(f"   ✅ Order shipped with tracking: {tracking}")
+    
+    if success:
+        print("   ✅ Supplier agent autonomously shipped the order")
+    else:
+        print("   ⚠️  Supplier agent did not complete objective, using fallback...")
+        order_data = buyer_client.get_instance(
+            package="commerce",
+            protocol_name="PurchaseOrder",
+            instance_id=po_id
+        )
+        current_state = order_data.get("@state") or order_data.get("state")
+        if current_state != "Shipped":
+            tracking = f"TRACK-A2A-{datetime.now().strftime('%H%M%S')}"
+            if not supplier_client:
+                supplier_client = await get_authenticated_client("supplier", "supplier_agent")
+            supplier_client.execute_action(
+                package="commerce",
+                protocol_name="PurchaseOrder",
+                instance_id=po_id,
+                action_name="shipOrder",
+                party="seller",
+                params={"tracking": tracking}
+            )
+            activity_logger.log_state_transition(
+                protocol="PurchaseOrder",
+                protocol_id=po_id,
+                from_state="Ordered",
+                to_state="Shipped",
+                triggered_by="system"
+            )
+            print(f"   ✅ Shipped via fallback with tracking: {tracking}")
     print()
     
     # =========================================================================
     # COMPLETE
     # =========================================================================
+    # Get final order state to extract tracking if available
+    final_order_data = buyer_client.get_instance(
+        package="commerce",
+        protocol_name="PurchaseOrder",
+        instance_id=po_id
+    )
+    tracking_final = final_order_data.get("trackingNumber") or final_order_data.get("tracking") or "N/A"
+    
     activity_logger.log_event(
         event_type="a2a_demo",
         actor="system",
@@ -933,7 +1186,7 @@ Call npl_commerce_PurchaseOrder_shipOrder with:
             "offer_id": offer_id,
             "po_id": po_id,
             "total": total,
-            "tracking": tracking
+            "tracking": tracking_final
         },
         level="info"
     )

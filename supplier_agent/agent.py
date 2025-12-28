@@ -378,6 +378,19 @@ Each tool has explicit typed parameters - check the tool's signature for require
 3. Create products with `npl_commerce_Product_create`
 4. Create and publish offers with `npl_commerce_Offer_create` and `npl_commerce_Offer_publish`
 
+## Offer Negotiation (CRITICAL)
+
+**DO NOT withdraw published offers during negotiation!**
+
+- Once an offer is published, you CANNOT update its price (updatePrice only works in draft state)
+- If you need to negotiate a different price:
+  - Create a NEW offer with the new price
+  - Tell the buyer about the new offer ID
+  - Let the buyer accept the new offer
+  - Only withdraw the old offer AFTER the new one is accepted
+- During A2A negotiation, communicate terms clearly but don't withdraw existing offers
+- The buyer needs a valid published offer to accept
+
 ## PurchaseOrder Actions (IMPORTANT)
 
 When working with PurchaseOrders, use these tools with the EXACT instance_id provided:
