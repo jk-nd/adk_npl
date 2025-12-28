@@ -1,7 +1,5 @@
 .activity-log-container {
   padding: 1.5rem;
-  max-width: 1400px;
-  margin: 0 auto;
   min-height: calc(100vh - 60px);
   background: var(--agent-bg);
 }
@@ -147,8 +145,7 @@
 }
 
 .col-action {
-  flex: 1;
-  min-width: 200px;
+  width: auto;
 }
 
 .col-expand {
@@ -259,14 +256,10 @@
 .reasoning-text {
   font-style: italic;
   color: var(--color-text-muted);
-  max-width: 600px;
-  display: inline-block;
 }
 
 .message-text {
   color: var(--color-text);
-  max-width: 600px;
-  display: inline-block;
 }
 
 .message-text strong {
