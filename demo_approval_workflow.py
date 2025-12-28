@@ -318,7 +318,8 @@ async def build_agents_and_runners() -> Dict[str, Any]:
     return {
         "buyer_runner": buyer_runner,
         "supplier_runner": supplier_runner,
-        "buyer_client": buyer_client
+        "buyer_client": buyer_client,
+        "session_service": session_service
     }
 
 
@@ -429,6 +430,7 @@ async def demo_approval_workflow() -> bool:
     buyer_runner = runners["buyer_runner"]
     supplier_runner = runners["supplier_runner"]
     buyer_client = runners["buyer_client"]
+    session_service = runners["session_service"]
     print("   ✅ Buyer and Supplier agents ready with NPL toolchains")
     print()
 
@@ -631,8 +633,14 @@ PO_ID: <id>
     # Step 6: Supplier submits quote
     print("💵 Step 6: Supplier agent submits quote (triggers approval)...")
     submit_quote_prompt = f"""
-Call npl_commerce_PurchaseOrder_submitQuote with instance_id={po_id} and party="seller".
-Confirm once done.
+You need to submit a quote for PurchaseOrder {po_id}.
+
+Call the tool: npl_commerce_PurchaseOrder_submitQuote
+With parameters:
+  - instance_id: "{po_id}"
+  - party: "seller"
+
+This will transition the order to ApprovalRequired state. Execute the tool now.
 """
     submit_text, submit_tools, _ = await run_agent_step(
         actor="supplier_agent",
@@ -781,8 +789,14 @@ If blocked due to ApprovalRequired, report the error message succinctly.
     # Step 9: Buyer retries placeOrder after approval
     print("✅ Step 9: Buyer agent retries placeOrder (should succeed)...")
     retry_prompt = f"""
-Order {po_id} is approved. Call npl_commerce_PurchaseOrder_placeOrder with instance_id={po_id} and party="buyer".
-Confirm success briefly.
+PurchaseOrder {po_id} has been approved by a human. Now place the order.
+
+Call the tool: npl_commerce_PurchaseOrder_placeOrder
+With parameters:
+  - instance_id: "{po_id}"
+  - party: "buyer"
+
+This will transition the order from Approved to Ordered state. Execute the tool now.
 """
     place_text, place_tools, _ = await run_agent_step(
         actor="buyer_agent",
@@ -847,12 +861,29 @@ Confirm success briefly.
         print("   ✅ Order placed via direct call")
     print()
 
-    # Step 10: Supplier ships
+    # Step 10: Supplier ships - use a fresh session to avoid context issues
     print("📦 Step 10: Supplier agent ships the order...")
     tracking = f"TRACK-{datetime.now().strftime('%Y%m%d%H%M')}"
+    
+    # Create a fresh session for this step
+    ship_session_id = f"supplier_ship_{po_id[:8]}"
+    await session_service.create_session(
+        app_name="approval_workflow",
+        user_id="supplier_user",
+        session_id=ship_session_id
+    )
+    
     ship_prompt = f"""
-Call npl_commerce_PurchaseOrder_shipOrder with instance_id={po_id}, party="seller",
-and tracking="{tracking}". Confirm shipment.
+You are a supplier agent. You have the npl_commerce_PurchaseOrder_shipOrder tool.
+
+Your task: Ship PurchaseOrder with ID {po_id}.
+
+Call npl_commerce_PurchaseOrder_shipOrder with:
+  - instance_id: "{po_id}"
+  - party: "seller"
+  - tracking: "{tracking}"
+
+Execute the tool now.
 """
     ship_text, ship_tools, _ = await run_agent_step(
         actor="supplier_agent",
@@ -860,7 +891,7 @@ and tracking="{tracking}". Confirm shipment.
         prompt=ship_prompt.strip(),
         step="ship_order",
         user_id="supplier_user",
-        session_id="supplier_session"
+        session_id=ship_session_id
     )
     
     # Verify state transition actually happened

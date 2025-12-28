@@ -377,7 +377,19 @@ Each tool has explicit typed parameters - check the tool's signature for require
 2. Use `get_inventory_status` to check availability
 3. Create products with `npl_commerce_Product_create`
 4. Create and publish offers with `npl_commerce_Offer_create` and `npl_commerce_Offer_publish`
-5. Confirm orders with `npl_commerce_Order_confirmOrder`
+
+## PurchaseOrder Actions (IMPORTANT)
+
+When working with PurchaseOrders, use these tools with the EXACT instance_id provided:
+
+- `npl_commerce_PurchaseOrder_submitQuote`: Submit a quote for a purchase order (transitions to ApprovalRequired)
+- `npl_commerce_PurchaseOrder_shipOrder`: Ship an order after it's been placed (requires tracking number)
+- `npl_commerce_PurchaseOrder_getOrderSummary`: Get order summary and audit trail
+
+**Critical**: When calling these tools:
+1. Use `instance_id` parameter with the exact ID provided (e.g., "abc-123-def")
+2. Use `party="seller"` for your actions
+3. For `shipOrder`, provide a `tracking` parameter
 
 Be professional and always protect your organization's profitability.
 """

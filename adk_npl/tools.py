@@ -510,7 +510,14 @@ Returns:
         if schema.get("properties"):
             action_params = self._flatten_schema(schema)
         
-        # Build parameter docs
+        # Build all parameters with explicit typing
+        all_params = [
+            {"name": "instance_id", "type": "str", "required": True, "nullable": False},
+            {"name": "party", "type": "str", "required": False, "nullable": True}
+        ]
+        all_params.extend(action_params)
+        
+        # Build parameter docs for docstring
         param_docs = [
             "    instance_id: str (required) - The protocol instance UUID",
             "    party: str (optional) - The party role executing this action (e.g. 'seller', 'buyer')"
@@ -519,9 +526,24 @@ Returns:
             req = "(required)" if param['required'] else "(optional)"
             param_docs.append(f"    {param['name']}: {param['type']} {req}")
         
-        def execute_action(instance_id: str, party: Optional[str] = None, **kwargs) -> Dict[str, Any]:
+        func_name = f"npl_{package}_{protocol_name}_{action_name}"
+        
+        doc = f"""{summary}
+
+Executes the {action_name} action on a {protocol_name} protocol instance.
+
+Args:
+{chr(10).join(param_docs)}
+
+Returns:
+    Action result or empty dict for void actions.
+"""
+        
+        def impl(**kwargs) -> Dict[str, Any]:
             """Execute an action on a protocol instance."""
             try:
+                instance_id = kwargs.pop("instance_id")
+                party = kwargs.pop("party", None)
                 return self.npl_client.execute_action(
                     package=package,
                     protocol_name=protocol_name,
@@ -533,17 +555,5 @@ Returns:
             except Exception as e:
                 return {"error": str(e)}
         
-        func_name = f"npl_{package}_{protocol_name}_{action_name}"
-        execute_action.__name__ = func_name
-        execute_action.__doc__ = f"""{summary}
-
-Executes the {action_name} action on a {protocol_name} protocol instance.
-
-Args:
-{chr(10).join(param_docs)}
-
-Returns:
-    Action result or empty dict for void actions.
-"""
-        
-        return execute_action
+        # Create function with typed signature so LLM can see all parameters
+        return create_typed_function(func_name, doc, all_params, impl)
