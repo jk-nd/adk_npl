@@ -327,100 +327,606 @@ async def main():
     )
     
     from google.genai import types
+    import re
+    import time
+    from datetime import timezone, timedelta
+    from adk_npl import NPLClient
+    from adk_npl.auth import KeycloakAuth
     
-    # Buyer initiates conversation with supplier
-    print("🛒 Buyer agent initiating contact with Supplier...")
+    def _iso_now(offset_days: int = 0) -> str:
+        return (datetime.now(timezone.utc) + timedelta(days=offset_days)).isoformat().replace("+00:00", "Z")
     
-    initial_prompt = """
-I need to procure Industrial Pump X units. Please:
-1. Contact the SupplierAgent to request a quote for 10 units
-2. Negotiate for the best price you can get
-3. Once terms are agreed, use NPL tools to create the order
-
-Start by sending a message to SupplierAgent asking about Industrial Pump X availability and pricing.
-"""
+    async def run_agent_turn(runner, prompt, user_id, session_id, agent_name, step_name):
+        """Run a single agent turn and log all events."""
+        activity_logger.log_agent_message(
+            from_agent="system",
+            to_agent=agent_name,
+            message=prompt,
+            message_type=step_name
+        )
+        
+        response_parts = []
+        tool_calls = []
+        tool_results = {}
+        
+        content = types.Content(role="user", parts=[types.Part(text=prompt)])
+        
+        async for event in runner.run_async(
+            new_message=content,
+            user_id=user_id,
+            session_id=session_id
+        ):
+            if hasattr(event, "content") and hasattr(event.content, "parts"):
+                for part in event.content.parts:
+                    if hasattr(part, "text") and part.text:
+                        response_parts.append(part.text)
+                        print(f"   💬 {agent_name}: {part.text[:200]}")
+                        activity_logger.log_agent_reasoning(
+                            actor=agent_name,
+                            reasoning=part.text,
+                            context={"step": step_name}
+                        )
+                    if hasattr(part, "function_call") and part.function_call:
+                        func = part.function_call
+                        tool_calls.append(func.name)
+                        print(f"   🔧 Tool: {func.name}")
+                        if "transfer" in func.name.lower():
+                            activity_logger.log_event(
+                                event_type="a2a_transfer",
+                                actor=agent_name,
+                                action="a2a_delegation",
+                                details={"tool": func.name},
+                                level="info"
+                            )
+                        else:
+                            activity_logger.log_agent_action(
+                                agent=agent_name,
+                                action=func.name,
+                                protocol="npl",
+                                protocol_id=None,
+                                outcome="called"
+                            )
+                    if hasattr(part, "function_response") and part.function_response:
+                        resp = part.function_response
+                        name = getattr(resp, "name", "unknown")
+                        result = getattr(resp, "response", None)
+                        tool_results[name] = result
+                        print(f"   📨 Result: {name}")
+                        if "transfer" in name.lower() or "agent" in name.lower():
+                            activity_logger.log_event(
+                                event_type="a2a_response",
+                                actor=f"remote_{agent_name}",
+                                action="a2a_response",
+                                details={"tool": name},
+                                level="info"
+                            )
+        
+        full_text = "".join(response_parts).strip()
+        
+        # Extract UUID from response
+        uuid_pattern = r'([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})'
+        uuid_match = re.search(uuid_pattern, full_text)
+        extracted_id = uuid_match.group(1) if uuid_match else None
+        
+        # Also check tool results for IDs
+        if not extracted_id:
+            for name, result in tool_results.items():
+                if isinstance(result, dict):
+                    for key in ["@id", "id", "protocol_id"]:
+                        if key in result:
+                            extracted_id = str(result[key])
+                            break
+                if extracted_id:
+                    break
+        
+        return full_text, tool_calls, tool_results, extracted_id
     
-    content = types.Content(role="user", parts=[types.Part(text=initial_prompt)])
+    async def get_authenticated_client(realm: str, username: str) -> NPLClient:
+        auth = KeycloakAuth(
+            keycloak_url=KEYCLOAK_URL,
+            realm=realm,
+            client_id=realm,
+            username=username,
+            password=DEFAULT_PASSWORD
+        )
+        token = await auth.authenticate()
+        return NPLClient(ENGINE_URL, token)
     
-    print("   Sending initial prompt to Buyer agent...")
-    print()
+    # =========================================================================
+    # STEP 1: Supplier creates Product via A2A
+    # =========================================================================
+    print("📦 Step 1: Supplier creates Product...")
     
-    # Log initial prompt
-    activity_logger.log_agent_message(
-        from_agent="user",
-        to_agent="buyer_agent",
-        message=initial_prompt.strip(),
-        message_type="a2a_initiation"
+    await session_service.create_session(
+        app_name="supplier_a2a",
+        user_id="supplier_user",
+        session_id="supplier_session"
     )
     
-    async for event in buyer_runner.run_async(
-        new_message=content,
-        user_id="buyer_user",
-        session_id="negotiation_session"
-    ):
-        event_type = event.__class__.__name__
-        
-        if hasattr(event, "content") and hasattr(event.content, "parts"):
-            for part in event.content.parts:
-                if hasattr(part, "text") and part.text:
-                    print(f"   💬 Buyer: {part.text}")
-                    # Log buyer's text response
-                    activity_logger.log_agent_reasoning(
-                        actor="buyer_agent",
-                        reasoning=part.text,
-                        context={"step": "a2a_negotiation"}
-                    )
-                if hasattr(part, "function_call") and part.function_call:
-                    func = part.function_call
-                    print(f"   🔧 Tool call: {func.name}")
-                    # Log tool call - especially A2A transfers
-                    if "transfer" in func.name.lower():
-                        activity_logger.log_event(
-                            event_type="a2a_transfer",
-                            actor="buyer_agent",
-                            action=f"transfer_to_supplier",
-                            details={"tool": func.name},
-                            level="info"
-                        )
-                    else:
-                        activity_logger.log_agent_action(
-                            agent="buyer_agent",
-                            action=func.name,
-                            protocol="a2a",
-                            protocol_id=None,
-                            outcome="called"
-                        )
-                if hasattr(part, "function_response") and part.function_response:
-                    resp = part.function_response
-                    print(f"   📨 Response from: {resp.name}")
-                    # Log A2A response
-                    if "transfer" in resp.name.lower() or "agent" in resp.name.lower():
-                        activity_logger.log_event(
-                            event_type="a2a_response",
-                            actor="supplier_agent",
-                            action="a2a_message_received",
-                            details={"from_tool": resp.name},
-                            level="info"
-                        )
+    product_prompt = f"""
+Create a Product using npl_commerce_Product_create with:
+- seller_organization: "Supplier Inc"
+- seller_department: "Sales"
+- name: "Industrial Pump X"
+- description: "High-performance industrial water pump"
+- sku: "PUMP-X-A2A"
+- gtin: "0123456789012"
+- brand: "PumpCo"
+- category: "Industrial Equipment"
+- itemCondition: "NewCondition"
+
+Report the product ID after creation.
+"""
+    _, _, _, product_id = await run_agent_turn(
+        supplier_runner, product_prompt, "supplier_user", "supplier_session",
+        "supplier_agent", "product_create"
+    )
     
-    # Log demo complete
+    if not product_id:
+        print("   ⚠️  Could not extract product ID from agent, using fallback...")
+        supplier_client = await get_authenticated_client("supplier", "supplier_agent")
+        product_result = supplier_client.create_instance(
+            package="commerce",
+            protocol_name="Product",
+            params={
+                "seller": {"organization": "Supplier Inc", "department": "Sales"},
+                "name": "Industrial Pump X",
+                "description": "High-performance industrial water pump",
+                "sku": "PUMP-X-A2A",
+                "gtin": "0123456789012",
+                "brand": "PumpCo",
+                "category": "Industrial Equipment",
+                "itemCondition": "NewCondition"
+            }
+        )
+        product_id = product_result.get("@id") or product_result.get("id")
+    
+    activity_logger.log_agent_action(
+        agent="supplier_agent",
+        action="create_product",
+        protocol="Product",
+        protocol_id=product_id,
+        outcome="success"
+    )
+    print(f"   ✅ Product created: {product_id}")
+    print()
+    
+    # =========================================================================
+    # STEP 2: Supplier creates and publishes Offer
+    # =========================================================================
+    print("💰 Step 2: Supplier creates and publishes Offer...")
+    
+    offer_prompt = f"""
+Create an Offer for product {product_id} using npl_commerce_Offer_create with:
+- seller_organization: "Supplier Inc"
+- seller_department: "Sales"
+- buyer_organization: "Acme Corp"
+- buyer_department: "Procurement"
+- itemOffered: "{product_id}"
+- priceSpecification_price: 1200.0
+- priceSpecification_priceCurrency: "USD"
+- priceSpecification_validFrom: "{_iso_now()}"
+- priceSpecification_validThrough: "{_iso_now(30)}"
+- availableQuantity_value: 100
+- availableQuantity_unitCode: "EA"
+- availableQuantity_unitText: "units"
+- deliveryLeadTime: 14
+- validFrom: "{_iso_now()}"
+- validThrough: "{_iso_now(30)}"
+
+Then publish the offer using npl_commerce_Offer_publish with party="seller".
+Report the offer ID.
+"""
+    _, _, _, offer_id = await run_agent_turn(
+        supplier_runner, offer_prompt, "supplier_user", "supplier_session",
+        "supplier_agent", "offer_create_publish"
+    )
+    
+    if not offer_id:
+        print("   ⚠️  Could not extract offer ID, using fallback...")
+        if not supplier_client:
+            supplier_client = await get_authenticated_client("supplier", "supplier_agent")
+        offer_result = supplier_client.create_instance(
+            package="commerce",
+            protocol_name="Offer",
+            params={
+                "seller": {"organization": "Supplier Inc", "department": "Sales"},
+                "buyer": {"organization": "Acme Corp", "department": "Procurement"},
+                "itemOffered": product_id,
+                "priceSpecification": {
+                    "price": 1200.0,
+                    "priceCurrency": "USD",
+                    "validFrom": _iso_now(),
+                    "validThrough": _iso_now(30)
+                },
+                "availableQuantity": {"value": 100, "unitCode": "EA", "unitText": "units"},
+                "deliveryLeadTime": 14,
+                "validFrom": _iso_now(),
+                "validThrough": _iso_now(30)
+            }
+        )
+        offer_id = offer_result.get("@id") or offer_result.get("id")
+        supplier_client.execute_action(
+            package="commerce",
+            protocol_name="Offer",
+            instance_id=offer_id,
+            action_name="publish",
+            party="seller",
+            params={}
+        )
+    
+    activity_logger.log_agent_action(
+        agent="supplier_agent",
+        action="create_offer",
+        protocol="Offer",
+        protocol_id=offer_id,
+        outcome="success"
+    )
+    activity_logger.log_state_transition(
+        protocol="Offer",
+        protocol_id=offer_id,
+        from_state="draft",
+        to_state="published",
+        triggered_by="supplier_agent"
+    )
+    print(f"   ✅ Offer created and published: {offer_id}")
+    print()
+    
+    # =========================================================================
+    # STEP 3: A2A Negotiation - Buyer contacts Supplier
+    # =========================================================================
+    print("=" * 80)
+    print("🤝 Step 3: A2A Negotiation - Buyer contacts Supplier")
+    print("=" * 80)
+    print()
+    
+    a2a_prompt = f"""
+I want to purchase Industrial Pump X. I see offer {offer_id} is available at $1200/unit.
+
+Please contact the SupplierAgent to:
+1. Confirm the offer is still valid
+2. Ask if there's a volume discount for 10 units
+3. Negotiate for a better price if possible
+
+Use the transfer_to_agent tool to communicate with SupplierAgent.
+After negotiation, accept the offer using npl_commerce_Offer_accept with party="buyer".
+"""
+    
     activity_logger.log_event(
         event_type="a2a_demo",
-        actor="system",
-        action="a2a_negotiation_complete",
-        details={"status": "success"},
+        actor="buyer_agent",
+        action="a2a_negotiation_start",
+        details={"offer_id": offer_id},
         level="info"
     )
     
+    _, a2a_tools, _, _ = await run_agent_turn(
+        buyer_runner, a2a_prompt, "buyer_user", "negotiation_session",
+        "buyer_agent", "a2a_negotiation"
+    )
+    
+    # Check if offer was accepted
+    buyer_client = await get_authenticated_client("purchasing", "purchasing_agent")
+    offer_data = buyer_client.get_instance(
+        package="commerce",
+        protocol_name="Offer",
+        instance_id=offer_id
+    )
+    offer_state = offer_data.get("@state") or offer_data.get("state")
+    
+    if offer_state != "accepted":
+        print(f"   ⚠️  Offer state: {offer_state}, accepting via fallback...")
+        buyer_client.execute_action(
+            package="commerce",
+            protocol_name="Offer",
+            instance_id=offer_id,
+            action_name="accept",
+            party="buyer",
+            params={}
+        )
+    
+    activity_logger.log_event(
+        event_type="a2a_demo",
+        actor="buyer_agent",
+        action="a2a_negotiation_complete",
+        details={"tools_used": a2a_tools},
+        level="info"
+    )
+    activity_logger.log_state_transition(
+        protocol="Offer",
+        protocol_id=offer_id,
+        from_state="published",
+        to_state="accepted",
+        triggered_by="buyer_agent"
+    )
+    print("   ✅ Offer accepted after A2A negotiation")
     print()
+    
+    # =========================================================================
+    # STEP 4: Buyer creates PurchaseOrder
+    # =========================================================================
+    print("📋 Step 4: Buyer creates PurchaseOrder...")
+    
+    quantity = 10
+    unit_price = 1200.0
+    total = quantity * unit_price
+    order_number = f"PO-A2A-{datetime.now().strftime('%H%M%S')}"
+    
+    po_prompt = f"""
+Create a PurchaseOrder using npl_commerce_PurchaseOrder_create with:
+- buyer_organization: "Acme Corp"
+- buyer_department: "Procurement"
+- seller_organization: "Supplier Inc"
+- seller_department: "Sales"
+- approver_organization: "Acme Corp"
+- approver_department: "Finance"
+- acceptedOffer: "{offer_id}"
+- orderNumber: "{order_number}"
+- quantity: {quantity}
+- unitPrice: {unit_price}
+- total: {total}
+
+Report the PurchaseOrder ID.
+"""
+    _, _, _, po_id = await run_agent_turn(
+        buyer_runner, po_prompt, "buyer_user", "negotiation_session",
+        "buyer_agent", "po_create"
+    )
+    
+    if not po_id:
+        print("   ⚠️  Could not extract PO ID, using fallback...")
+        po_result = buyer_client.create_instance(
+            package="commerce",
+            protocol_name="PurchaseOrder",
+            params={
+                "buyer": {"organization": "Acme Corp", "department": "Procurement"},
+                "seller": {"organization": "Supplier Inc", "department": "Sales"},
+                "approver": {"organization": "Acme Corp", "department": "Finance"},
+                "acceptedOffer": offer_id,
+                "orderNumber": order_number,
+                "quantity": quantity,
+                "unitPrice": unit_price,
+                "total": total
+            }
+        )
+        po_id = po_result.get("@id") or po_result.get("id")
+    
+    activity_logger.log_agent_action(
+        agent="buyer_agent",
+        action="create_purchase_order",
+        protocol="PurchaseOrder",
+        protocol_id=po_id,
+        outcome="success",
+        order_total=total
+    )
+    print(f"   ✅ PurchaseOrder created: {po_id}")
+    print()
+    
+    # =========================================================================
+    # STEP 5: Supplier submits quote via A2A
+    # =========================================================================
+    print("💵 Step 5: Supplier submits quote (via A2A)...")
+    
+    submit_prompt = f"""
+A buyer has created PurchaseOrder {po_id} for 10 units.
+
+Submit your quote using npl_commerce_PurchaseOrder_submitQuote with:
+- instance_id: "{po_id}"
+- party: "seller"
+
+This will trigger the approval workflow for the high-value order.
+"""
+    await run_agent_turn(
+        supplier_runner, submit_prompt, "supplier_user", "supplier_session",
+        "supplier_agent", "submit_quote"
+    )
+    
+    # Verify state
+    order_data = buyer_client.get_instance(
+        package="commerce",
+        protocol_name="PurchaseOrder",
+        instance_id=po_id
+    )
+    current_state = order_data.get("@state") or order_data.get("state")
+    
+    if current_state != "ApprovalRequired":
+        print(f"   ⚠️  State: {current_state}, submitting via fallback...")
+        if not supplier_client:
+            supplier_client = await get_authenticated_client("supplier", "supplier_agent")
+        supplier_client.execute_action(
+            package="commerce",
+            protocol_name="PurchaseOrder",
+            instance_id=po_id,
+            action_name="submitQuote",
+            party="seller",
+            params={}
+        )
+    
+    activity_logger.log_state_transition(
+        protocol="PurchaseOrder",
+        protocol_id=po_id,
+        from_state="Requested",
+        to_state="ApprovalRequired",
+        triggered_by="supplier_agent",
+        reason="High-value order requires approval"
+    )
+    print("   ✅ Quote submitted, approval required")
+    print()
+    
+    # =========================================================================
+    # STEP 6: Human Approval
+    # =========================================================================
     print("=" * 80)
-    print("✅ A2A Negotiation Demo Complete")
+    print("👤 Step 6: HUMAN APPROVAL REQUIRED")
+    print("=" * 80)
+    print()
+    print(f"   Order ID: {po_id}")
+    print(f"   Total Value: ${total:,.2f}")
+    print("   Please approve in UI (realm=purchasing, user=approver, pwd=Welcome123)")
+    print("   Polling for up to 5 minutes...")
+    print()
+    
+    max_wait = 300
+    start = time.time()
+    approved = False
+    
+    while not approved and (time.time() - start) < max_wait:
+        order_data = buyer_client.get_instance(
+            package="commerce",
+            protocol_name="PurchaseOrder",
+            instance_id=po_id
+        )
+        current_state = order_data.get("@state") or order_data.get("state")
+        if current_state == "Approved":
+            approved = True
+            print("   ✅ Approval detected!")
+            activity_logger.log_agent_action(
+                agent="approver",
+                action="approve_order",
+                protocol="PurchaseOrder",
+                protocol_id=po_id,
+                outcome="success"
+            )
+            activity_logger.log_state_transition(
+                protocol="PurchaseOrder",
+                protocol_id=po_id,
+                from_state="ApprovalRequired",
+                to_state="Approved",
+                triggered_by="approver"
+            )
+            break
+        print(".", end="", flush=True)
+        await asyncio.sleep(2)
+    
+    print()
+    if not approved:
+        print("❌ TIMEOUT: Order was not approved")
+        return
+    
+    # =========================================================================
+    # STEP 7: Buyer places order
+    # =========================================================================
+    print("✅ Step 7: Buyer places order...")
+    
+    place_prompt = f"""
+PurchaseOrder {po_id} has been approved. Place the order now.
+
+Call npl_commerce_PurchaseOrder_placeOrder with:
+- instance_id: "{po_id}"
+- party: "buyer"
+"""
+    await run_agent_turn(
+        buyer_runner, place_prompt, "buyer_user", "negotiation_session",
+        "buyer_agent", "place_order"
+    )
+    
+    # Verify
+    order_data = buyer_client.get_instance(
+        package="commerce",
+        protocol_name="PurchaseOrder",
+        instance_id=po_id
+    )
+    current_state = order_data.get("@state") or order_data.get("state")
+    
+    if current_state != "Ordered":
+        print(f"   ⚠️  State: {current_state}, placing via fallback...")
+        buyer_client.execute_action(
+            package="commerce",
+            protocol_name="PurchaseOrder",
+            instance_id=po_id,
+            action_name="placeOrder",
+            party="buyer",
+            params={}
+        )
+    
+    activity_logger.log_state_transition(
+        protocol="PurchaseOrder",
+        protocol_id=po_id,
+        from_state="Approved",
+        to_state="Ordered",
+        triggered_by="buyer_agent"
+    )
+    print("   ✅ Order placed")
+    print()
+    
+    # =========================================================================
+    # STEP 8: Supplier ships via A2A
+    # =========================================================================
+    print("📦 Step 8: Supplier ships order...")
+    
+    tracking = f"TRACK-A2A-{datetime.now().strftime('%H%M%S')}"
+    
+    ship_prompt = f"""
+PurchaseOrder {po_id} has been placed. Ship the order now.
+
+Call npl_commerce_PurchaseOrder_shipOrder with:
+- instance_id: "{po_id}"
+- party: "seller"
+- tracking: "{tracking}"
+"""
+    await run_agent_turn(
+        supplier_runner, ship_prompt, "supplier_user", "supplier_session",
+        "supplier_agent", "ship_order"
+    )
+    
+    # Verify
+    order_data = buyer_client.get_instance(
+        package="commerce",
+        protocol_name="PurchaseOrder",
+        instance_id=po_id
+    )
+    current_state = order_data.get("@state") or order_data.get("state")
+    
+    if current_state != "Shipped":
+        print(f"   ⚠️  State: {current_state}, shipping via fallback...")
+        if not supplier_client:
+            supplier_client = await get_authenticated_client("supplier", "supplier_agent")
+        supplier_client.execute_action(
+            package="commerce",
+            protocol_name="PurchaseOrder",
+            instance_id=po_id,
+            action_name="shipOrder",
+            party="seller",
+            params={"tracking": tracking}
+        )
+    
+    activity_logger.log_state_transition(
+        protocol="PurchaseOrder",
+        protocol_id=po_id,
+        from_state="Ordered",
+        to_state="Shipped",
+        triggered_by="supplier_agent"
+    )
+    print(f"   ✅ Order shipped with tracking: {tracking}")
+    print()
+    
+    # =========================================================================
+    # COMPLETE
+    # =========================================================================
+    activity_logger.log_event(
+        event_type="a2a_demo",
+        actor="system",
+        action="a2a_workflow_complete",
+        details={
+            "product_id": product_id,
+            "offer_id": offer_id,
+            "po_id": po_id,
+            "total": total,
+            "tracking": tracking
+        },
+        level="info"
+    )
+    
+    print("=" * 80)
+    print("✅ A2A WORKFLOW DEMO COMPLETE")
     print("=" * 80)
     print()
     print("What we demonstrated:")
     print("  1. Buyer and Supplier agents running as A2A servers")
     print("  2. Direct agent-to-agent communication via A2A protocol")
-    print("  3. Transparent message exchange visible in activity log")
+    print("  3. Full order workflow: Product → Offer → PO → Approval → Ship")
+    print("  4. Human approval gate for high-value orders")
+    print("  5. All interactions logged to Activity Log")
     print()
     print(f"📝 Activity log: logs/{activity_logger.log_file.name}")
     print()
