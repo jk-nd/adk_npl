@@ -32,10 +32,10 @@ This project demonstrates how AI agents can autonomously initiate business trans
 │                          ▼                                       │
 │           ┌──────────────────────────────┐                       │
 │           │        NPL Engine            │                       │
-│           │   (Trusts both issuers)      │                       │
+│           │   (Trusts keycloak issuer)   │                       │
 │           │   schema.org commerce        │                       │
 │           │   protocols (Product,        │                       │
-│           │   Offer, Order)              │                       │
+│           │   Offer, PurchaseOrder)       │                       │
 │           └──────────────────────────────┘                       │
 └─────────────────────────────────────────────────────────────────┘
 ```
