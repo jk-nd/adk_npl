@@ -87,6 +87,41 @@
   transform: scale(1.05);
 }
 
+/* Notification Badge */
+.tab-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  font-size: 0.625rem;
+  font-weight: 700;
+  line-height: 1;
+  color: var(--color-bg);
+  background-color: var(--color-text);
+  border-radius: 9px;
+  margin-left: 0.25rem;
+  animation: pulse-badge 2s ease-in-out infinite;
+}
+
+.tab-button.active .tab-badge {
+  background-color: var(--color-accent);
+  color: white;
+  animation: none;
+}
+
+@keyframes pulse-badge {
+  0%, 100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.85;
+    transform: scale(1.05);
+  }
+}
+
 .tab-content {
   width: 100%;
   min-height: calc(100vh - 60px);

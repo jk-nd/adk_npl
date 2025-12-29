@@ -113,8 +113,9 @@ Access at http://localhost:5173
 - ✅ **Keycloak authentication** - Built-in auth handling with login/logout
 - ✅ **Light/Dark theme toggle** - Modern UI with theme switching
 - ✅ **Approval Dashboard** - Human-in-the-loop approval interface
-- ✅ **Activity Log** - Real-time feed of all system events
-- ✅ **Metrics Dashboard** - Performance metrics and monitoring
+- ✅ **Pending approval notifications** - Visual badge alerts when approval is required
+- ✅ **Activity Log** - Real-time feed of all system events with expandable A2A messages
+- ✅ **Metrics Dashboard** - Performance metrics including LLM calls and A2A transfers
 - ✅ **Always in sync** - Regenerate types when protocols change
 
 **To regenerate types after protocol changes:**
