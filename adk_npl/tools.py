@@ -12,6 +12,7 @@ from google.adk.tools import FunctionTool
 
 from .client import NPLClient
 from .discovery import NPLPackageDiscovery
+from .protocol_memory import NPLProtocolMemory, create_memory_tools, auto_track_result
 from .utils import (
     Cache,
     ToolDiscoveryError,
@@ -103,10 +104,85 @@ class NPLToolGenerator:
     typed parameters, making them self-documenting for LLMs.
     """
     
+    # Error categories for structured error responses
+    ERROR_PATTERNS = {
+        "state_error": {
+            "patterns": ["illegal protocol state", "current state is not", "not one of"],
+            "retryable": True,
+            "guidance": "The protocol is not in the correct state for this action. Query the protocol instance to check its current state, then wait and retry when the state allows this action."
+        },
+        "business_rule": {
+            "patterns": ["business rule", "assertion failed", "require(", "validation"],
+            "retryable": False,
+            "guidance": "A business rule was violated. Check the error message for details and adjust your parameters to comply with the rule."
+        },
+        "not_found": {
+            "patterns": ["no such", "not found", "does not exist", "404"],
+            "retryable": False,
+            "guidance": "The referenced item does not exist. Verify the ID is correct by querying for available instances."
+        },
+        "permission_denied": {
+            "patterns": ["permission denied", "not authorized", "forbidden", "403"],
+            "retryable": False,
+            "guidance": "You don't have permission to perform this action. Check if you're using the correct party role."
+        },
+        "invalid_data": {
+            "patterns": ["invalid", "malformed", "bad request", "400", "parse error"],
+            "retryable": False,
+            "guidance": "The data format is invalid. Check parameter types and formats - especially DateTime fields which must be in format '2006-01-02T15:04:05.999+01:00[Europe/Zurich]'."
+        },
+        "runtime_error": {
+            "patterns": ["runtime error", "r13:", "r14:", "r15:"],
+            "retryable": True,
+            "guidance": "A runtime error occurred in the NPL protocol. This may be a state transition issue - query the protocol state and retry if appropriate."
+        }
+    }
+    
+    @classmethod
+    def _create_structured_error(cls, error: Exception, action_name: str = "") -> Dict[str, Any]:
+        """
+        Create a structured error response that helps LLMs understand and handle errors.
+        
+        Categorizes the error and provides actionable guidance for recovery.
+        
+        Args:
+            error: The exception that occurred
+            action_name: The name of the action that failed (for context)
+            
+        Returns:
+            Structured error dict with error_type, message, retryable, and guidance
+        """
+        error_str = str(error).lower()
+        original_message = str(error)
+        
+        # Categorize the error
+        error_type = "unknown_error"
+        retryable = False
+        guidance = "An unexpected error occurred. Check the error message for details."
+        
+        for category, config in cls.ERROR_PATTERNS.items():
+            if any(pattern in error_str for pattern in config["patterns"]):
+                error_type = category
+                retryable = config["retryable"]
+                guidance = config["guidance"]
+                break
+        
+        return {
+            "success": False,
+            "error_type": error_type,
+            "error": original_message,
+            "retryable": retryable,
+            "guidance": guidance,
+            "action": action_name,
+            "hint": "If retryable=True, check the protocol state and try again. If retryable=False, adjust your parameters."
+        }
+
     def __init__(
         self,
         npl_client: NPLClient,
-        cache_ttl: float = 300.0
+        cache_ttl: float = 300.0,
+        protocol_memory: Optional[NPLProtocolMemory] = None,
+        agent_id: str = "default"
     ):
         """
         Initialize tool generator.
@@ -114,11 +190,17 @@ class NPLToolGenerator:
         Args:
             npl_client: Authenticated NPL client
             cache_ttl: Cache TTL in seconds (default: 5 minutes)
+            protocol_memory: Optional memory for tracking protocol instances
+            agent_id: Agent identifier for memory scoping
         """
         self.npl_client = npl_client
         self.cache = Cache(default_ttl=cache_ttl)
         self._tools_cache: Optional[List[FunctionTool]] = None
         self._cache_time: float = 0.0
+        self.agent_id = agent_id
+        
+        # Protocol memory for tracking instances across turns
+        self.protocol_memory = protocol_memory or NPLProtocolMemory.get_instance(agent_id)
     
     async def generate_tools(
         self,
@@ -165,6 +247,11 @@ class NPLToolGenerator:
         if not all_tools:
             raise ToolDiscoveryError("No tools generated from any package")
         
+        # Add memory tools for protocol tracking
+        memory_tools = create_memory_tools(self.agent_id)
+        all_tools.extend(memory_tools)
+        logger.info(f"✅ Added {len(memory_tools)} memory tool(s) for protocol tracking")
+        
         # Cache results
         self._tools_cache = all_tools
         import time
@@ -208,6 +295,9 @@ class NPLToolGenerator:
         
         tools = []
         
+        # Track protocols that have create tools (for query tool generation)
+        protocols_with_tools = set()
+        
         # Process each path in the OpenAPI spec
         for path, methods in spec.get("paths", {}).items():
             if "post" not in methods:
@@ -222,6 +312,7 @@ class NPLToolGenerator:
                 )
                 tool = FunctionTool(func, require_confirmation=False)
                 tools.append(tool)
+                protocols_with_tools.add(protocol_name)
                 
             elif is_action_execution_path(path, package):
                 protocol_name, action_name = parse_openapi_path(path, package)
@@ -230,6 +321,17 @@ class NPLToolGenerator:
                 )
                 tool = FunctionTool(func, require_confirmation=False)
                 tools.append(tool)
+                protocols_with_tools.add(protocol_name)
+        
+        # Generate query tools for protocols that have create/action tools
+        for protocol_name in protocols_with_tools:
+            # Add get instance tool
+            get_func = self._create_get_instance_function(package, protocol_name)
+            tools.append(FunctionTool(get_func, require_confirmation=False))
+            
+            # Add list instances tool
+            list_func = self._create_list_instances_function(package, protocol_name)
+            tools.append(FunctionTool(list_func, require_confirmation=False))
         
         return tools
     
@@ -348,6 +450,183 @@ class NPLToolGenerator:
         openapi_type = prop_def.get("type", "string")
         return type_map.get(openapi_type, "str")
     
+    def _get_format_examples(self) -> Dict[str, str]:
+        """
+        Get comprehensive format-to-example mapping for standard OpenAPI formats.
+        
+        This covers all standard OpenAPI 3.0 format types to provide examples
+        when the Engine doesn't include them in the OpenAPI spec.
+        
+        Returns:
+            Dictionary mapping format strings to example descriptions
+        """
+        return {
+            # Date/Time formats (OpenAPI standard)
+            'date': "Date string in ISO 8601 format. Example: '2025-01-15'",
+            'date-time': "DateTime string in ISO 8601 format. Example: '2025-01-15T10:30:00Z'",
+            'zoned-date-time': "DateTime string in zoned-date-time format (schema.org). Example: '2006-01-02T15:04:05.999+01:00[Europe/Zurich]'",
+            
+            # Identifier formats
+            'uuid': "UUID string. Example: '550e8400-e29b-41d4-a716-446655440000'",
+            'uri': "URI string. Example: 'http://localhost:12000/npl/commerce/Offer/123/publish'",
+            'uri-reference': "URI reference string. Example: '/npl/commerce/Offer/123'",
+            'email': "Email address. Example: 'user@example.com'",
+            'hostname': "Hostname. Example: 'example.com'",
+            'ipv4': "IPv4 address. Example: '192.168.1.1'",
+            'ipv6': "IPv6 address. Example: '2001:0db8:85a3:0000:0000:8a2e:0370:7334'",
+            
+            # Numeric formats
+            'int32': "32-bit signed integer. Example: 42",
+            'int64': "64-bit signed integer. Example: 1234567890",
+            'float': "Floating point number. Example: 3.14",
+            'double': "Double precision floating point. Example: 3.14159265359",
+            
+            # Binary formats
+            'byte': "Base64-encoded byte string. Example: 'SGVsbG8='",
+            'binary': "Binary data (base64 encoded). Example: 'SGVsbG8gV29ybGQ='",
+            
+            # String formats
+            'password': "Password string (sensitive, not displayed)",
+        }
+    
+    def _infer_semantic_meaning(self, param_name: str, param_type: str) -> Optional[str]:
+        """
+        Infer semantic meaning from field name patterns.
+        
+        Uses common naming conventions to provide context when format/description
+        are missing. This helps LLMs understand field purpose.
+        
+        Patterns are checked in order of specificity (most specific first).
+        
+        Args:
+            param_name: Parameter name (may include prefix like 'priceSpecification_')
+            param_type: Parameter type ('str', 'float', 'int', etc.)
+            
+        Returns:
+            Inferred description or None
+        """
+        # Extract base name (remove prefixes like 'priceSpecification_')
+        base_name = param_name.split('_')[-1].lower()
+        
+        # Check most specific patterns first
+        
+        # Unit/Duration patterns (check before generic 'time' patterns)
+        if any(pattern in base_name for pattern in ['leadtime', 'duration', 'period', 'unitcode', 'unittext']):
+            return "Unit of measurement or duration"
+        
+        # Currency patterns (check before generic 'price' patterns)
+        if 'currency' in base_name and param_type == 'str':
+            return "Currency code (e.g., 'USD', 'EUR')"
+        
+        # Code/Identifier patterns (check before generic 'number' patterns)
+        if any(pattern in base_name for pattern in ['code', 'sku', 'gtin', 'barcode', 'ordernumber', 'tracking']):
+            return "Code or identifier string"
+        
+        # Date/Time patterns (specific date/time fields)
+        if any(pattern in base_name for pattern in ['date', 'validfrom', 'validthrough', 'expires', 'deadline', 'timestamp']):
+            if param_type == 'str':
+                return "Date or DateTime value"
+            return "Date/time related value"
+        
+        # Generic time (only if not already matched above)
+        if 'time' in base_name and 'leadtime' not in base_name:
+            if param_type == 'str':
+                return "Date or DateTime value"
+            return "Time-related value"
+        
+        # Identifier patterns
+        if any(pattern in base_name for pattern in ['id', 'uuid', 'reference', 'ref']):
+            return "Identifier or reference value"
+        
+        # Quantity/Amount patterns (numeric)
+        if param_type in ['float', 'int']:
+            if any(pattern in base_name for pattern in ['quantity', 'amount', 'value', 'count', 'number', 'total', 'price', 'cost']):
+                return "Numeric quantity or amount"
+        
+        # Currency/Money patterns (string or numeric)
+        if any(pattern in base_name for pattern in ['price', 'cost', 'amount', 'total']):
+            return "Monetary value"
+        
+        # Text/Description patterns
+        if any(pattern in base_name for pattern in ['name', 'title', 'description', 'text', 'comment', 'note']):
+            return "Text description or label"
+        
+        # Status/State patterns
+        if any(pattern in base_name for pattern in ['status', 'state', 'condition']):
+            return "Status or state value"
+        
+        # Organization/Party patterns
+        if any(pattern in base_name for pattern in ['organization', 'org', 'company', 'department', 'party']):
+            return "Organization or party identifier"
+        
+        return None
+    
+    def _build_param_description(self, param: Dict[str, Any]) -> str:
+        """
+        Build a comprehensive parameter description using OpenAPI metadata.
+        
+        Uses a systematic priority order to provide the best possible description:
+        1. Enum values (if present) - most specific
+        2. OpenAPI example (if present) - from Engine
+        3. Format-based example (if format exists but no example) - standard formats
+        4. Description from OpenAPI (if present) - from Engine
+        5. Inferred semantic meaning (from field name patterns) - intelligent fallback
+        6. Type-based hint (final fallback) - generic
+        
+        Args:
+            param: Parameter dict with name, type, format, example, description, enum
+            
+        Returns:
+            Description string for the parameter
+        """
+        param_name = param.get('name', '')
+        param_type = param.get('type', 'str')
+        enum_values = param.get('enum', [])
+        example = param.get('example', '')
+        format_type = param.get('format', '')
+        description = param.get('description', '').strip()
+        
+        # Priority 1: Enum - show all values (most specific)
+        if enum_values:
+            return f"One of: {', '.join(enum_values)}"
+        
+        # Priority 2: Use OpenAPI example if available (from Engine)
+        if example:
+            if description:
+                return f"{description}. Example: '{example}'"
+            else:
+                return f"Example: '{example}'"
+        
+        # Priority 3: Format-based examples (standard OpenAPI formats)
+        if format_type:
+            format_examples = self._get_format_examples()
+            if format_type in format_examples:
+                format_desc = format_examples[format_type]
+                if description:
+                    return f"{description}. {format_desc}"
+                else:
+                    return format_desc
+        
+        # Priority 4: Description from OpenAPI (from Engine, when available)
+        if description:
+            return description
+        
+        # Priority 5: Inferred semantic meaning (from field name patterns)
+        inferred = self._infer_semantic_meaning(param_name, param_type)
+        if inferred:
+            return inferred
+        
+        # Priority 6: Type-based hint (final fallback)
+        type_hints = {
+            'str': "String value",
+            'float': "Floating point number",
+            'int': "Integer number",
+            'bool': "Boolean value (true/false)",
+            'list': "List of values",
+            'dict': "Dictionary/object value",
+        }
+        return type_hints.get(param_type, "Value")
+    
     def _create_schema_aware_create_function(
         self,
         package: str,
@@ -394,11 +673,7 @@ class NPLToolGenerator:
         param_docs = []
         for p in all_params:
             req = "(required)" if p['required'] else "(optional)"
-            desc = p.get('description', '')
-            if p.get('enum'):
-                desc = f"One of: {', '.join(p['enum'])}"
-            elif p.get('format') == 'zoned-date-time':
-                desc = f"DateTime string (e.g. '2025-01-15T00:00:00Z')"
+            desc = self._build_param_description(p)
             param_docs.append(f"{p['name']}: {p['type']} {req} - {desc}")
         
         func_name = f"npl_{package}_{protocol_name}_create"
@@ -411,10 +686,20 @@ Args:
     {chr(10) + '    '.join(param_docs)}
 
 Returns:
-    Created protocol instance with @id, or error details if creation fails."""
+    On success: Protocol instance with @id and success=True
+    On error: Structured error with error_type, retryable flag, and guidance
+
+Error Handling:
+    - If error_type='invalid_data': Check parameter formats (especially DateTime: '2006-01-02T15:04:05.999+01:00[Europe/Zurich]')
+    - If error_type='business_rule': A validation rule failed - check the error message for details
+    - If error_type='permission_denied': Verify the party credentials are correct
+    - If retryable=True: Wait briefly and retry the action"""
         
         # Store params metadata for use in the closure
         params_meta = {p['name']: p for p in params}
+        
+        # Capture protocol memory for auto-tracking
+        protocol_memory = self.protocol_memory
         
         # Create the implementation function
         def impl(**kwargs) -> Dict[str, Any]:
@@ -468,17 +753,20 @@ Returns:
                         current = current[part]
                     current[parts[-1]] = value
                 
-                return self.npl_client.create_protocol(
+                result = self.npl_client.create_protocol(
                     package=package,
                     protocol_name=protocol_name,
                     parties=parties_dict,
                     data=data
                 )
+                # Add success indicator for clarity
+                if isinstance(result, dict) and "@id" in result:
+                    result["success"] = True
+                    # Auto-track in protocol memory
+                    auto_track_result(protocol_memory, protocol_name, result, role="owner")
+                return result
             except Exception as e:
-                return {
-                    "error": str(e),
-                    "hint": "Check that all required fields are provided with correct types"
-                }
+                return NPLToolGenerator._create_structured_error(e, f"{protocol_name}_create")
         
         # Create function with typed signature
         return create_typed_function(func_name, doc, all_params, impl)
@@ -524,7 +812,8 @@ Returns:
         ]
         for param in action_params:
             req = "(required)" if param['required'] else "(optional)"
-            param_docs.append(f"    {param['name']}: {param['type']} {req}")
+            desc = self._build_param_description(param)
+            param_docs.append(f"    {param['name']}: {param['type']} {req} - {desc}")
         
         func_name = f"npl_{package}_{protocol_name}_{action_name}"
         
@@ -532,19 +821,33 @@ Returns:
 
 Executes the {action_name} action on a {protocol_name} protocol instance.
 
+IMPORTANT: This action may only be valid in certain protocol states. If you receive a state_error,
+query the protocol instance first to check its current state, then wait and retry when appropriate.
+
 Args:
 {chr(10).join(param_docs)}
 
 Returns:
-    Action result or empty dict for void actions.
+    On success: Action result with success=True
+    On error: Structured error with error_type, retryable flag, and guidance
+
+Error Handling:
+    - If error_type='state_error' and retryable=True: The protocol is not in the correct state. 
+      Query the instance to check its current state, wait, and retry when the state allows this action.
+    - If error_type='business_rule': A validation rule failed - check the error message and adjust parameters.
+    - If error_type='not_found': The instance_id is invalid - verify the ID by querying available instances.
+    - If error_type='permission_denied': You may be using the wrong party role for this action.
 """
+        
+        # Capture protocol memory for auto-tracking
+        protocol_memory = self.protocol_memory
         
         def impl(**kwargs) -> Dict[str, Any]:
             """Execute an action on a protocol instance."""
             try:
                 instance_id = kwargs.pop("instance_id")
                 party = kwargs.pop("party", None)
-                return self.npl_client.execute_action(
+                result = self.npl_client.execute_action(
                     package=package,
                     protocol_name=protocol_name,
                     instance_id=instance_id,
@@ -552,8 +855,145 @@ Returns:
                     party=party,
                     params=kwargs
                 )
+                # Add success indicator for clarity
+                if result is None:
+                    # Update state in memory for void actions (state transitions)
+                    protocol_memory.update_state(protocol_name, instance_id, action_name)
+                    return {"success": True, "result": "Action completed successfully (void return)", "instance_id": instance_id}
+                if isinstance(result, dict):
+                    result["success"] = True
+                    result["instance_id"] = instance_id
+                    # Track state update if present
+                    new_state = result.get("@state") or result.get("state")
+                    if new_state:
+                        protocol_memory.update_state(protocol_name, instance_id, new_state)
+                return result
             except Exception as e:
-                return {"error": str(e)}
+                return NPLToolGenerator._create_structured_error(e, f"{protocol_name}_{action_name}")
         
         # Create function with typed signature so LLM can see all parameters
+        return create_typed_function(func_name, doc, all_params, impl)
+    
+    def _create_get_instance_function(
+        self,
+        package: str,
+        protocol_name: str
+    ) -> Callable:
+        """
+        Create a function to get a specific protocol instance by ID.
+        
+        This is crucial for agents to check protocol state before attempting actions.
+        """
+        func_name = f"npl_{package}_{protocol_name}_get"
+        
+        doc = f"""Get a {protocol_name} protocol instance by ID.
+
+Use this tool to check the current state of a protocol instance BEFORE attempting actions.
+This is especially important when an action fails with a state_error - query the instance
+to see its current state and determine when to retry.
+
+Args:
+    instance_id: str (required) - The protocol instance UUID
+
+Returns:
+    The protocol instance including:
+    - @id: The instance UUID
+    - @state: Current protocol state (e.g., 'created', 'published', 'accepted')
+    - All protocol data fields
+    
+    On error: Structured error with error_type and guidance
+
+Usage Pattern:
+    1. Before actions: Query to verify the protocol is in the expected state
+    2. After state_error: Query to see what state the protocol is actually in
+    3. After retryable errors: Query, wait if needed, then retry when state allows
+"""
+        
+        all_params = [
+            {"name": "instance_id", "type": "str", "required": True, "nullable": False}
+        ]
+        
+        def impl(**kwargs) -> Dict[str, Any]:
+            """Get a protocol instance by ID."""
+            try:
+                instance_id = kwargs.get("instance_id")
+                result = self.npl_client.get_instance(
+                    package=package,
+                    protocol_name=protocol_name,
+                    instance_id=instance_id
+                )
+                if isinstance(result, dict):
+                    result["success"] = True
+                return result
+            except Exception as e:
+                return NPLToolGenerator._create_structured_error(e, f"{protocol_name}_get")
+        
+        return create_typed_function(func_name, doc, all_params, impl)
+    
+    def _create_list_instances_function(
+        self,
+        package: str,
+        protocol_name: str
+    ) -> Callable:
+        """
+        Create a function to list protocol instances with optional filtering.
+        
+        Helps agents discover existing instances and verify IDs.
+        """
+        func_name = f"npl_{package}_{protocol_name}_list"
+        
+        doc = f"""List {protocol_name} protocol instances.
+
+Use this tool to discover existing protocol instances, verify IDs, or find instances
+in a specific state. Useful when you need to find an instance to act on.
+
+Args:
+    page: int (optional) - Page number (default: 1)
+    page_size: int (optional) - Number of results per page (default: 25, max: 100)
+    state: str (optional) - Filter by protocol state (e.g., 'published', 'accepted')
+
+Returns:
+    List of protocol instances with @id, @state, and key data fields.
+    
+    On error: Structured error with error_type and guidance
+
+Usage Pattern:
+    1. Find instances: List all instances to discover what exists
+    2. Filter by state: Use state parameter to find instances ready for specific actions
+    3. Verify IDs: Confirm an instance exists before attempting actions
+"""
+        
+        all_params = [
+            {"name": "page", "type": "int", "required": False, "nullable": True},
+            {"name": "page_size", "type": "int", "required": False, "nullable": True},
+            {"name": "state", "type": "str", "required": False, "nullable": True}
+        ]
+        
+        def impl(**kwargs) -> Dict[str, Any]:
+            """List protocol instances."""
+            try:
+                page = kwargs.get("page", 1) or 1
+                page_size = kwargs.get("page_size", 25) or 25
+                state = kwargs.get("state")
+                
+                # Build filters for state if provided
+                filters = {}
+                if state:
+                    filters["state"] = state
+                
+                result = self.npl_client.query_instances(
+                    package=package,
+                    protocol_name=protocol_name,
+                    filters=filters if filters else None,
+                    page=page - 1,  # query_instances expects 0-indexed
+                    size=page_size
+                )
+                if isinstance(result, dict):
+                    result["success"] = True
+                elif isinstance(result, list):
+                    result = {"success": True, "items": result, "count": len(result)}
+                return result
+            except Exception as e:
+                return NPLToolGenerator._create_structured_error(e, f"{protocol_name}_list")
+        
         return create_typed_function(func_name, doc, all_params, impl)

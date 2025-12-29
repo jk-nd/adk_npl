@@ -34,6 +34,10 @@ from .activity_logger import (
     get_activity_logger,
     log_activity
 )
+from .protocol_memory import (
+    NPLProtocolMemory,
+    create_memory_tools
+)
 
 __version__ = "0.1.0"
 
@@ -79,5 +83,9 @@ __all__ = [
     "ActivityLogger",
     "get_activity_logger",
     "log_activity",
+    
+    # Protocol Memory
+    "NPLProtocolMemory",
+    "create_memory_tools",
 ]
 

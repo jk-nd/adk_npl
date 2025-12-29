@@ -4,7 +4,39 @@ This document explains how the Purchasing and Supplier agents interact.
 
 ## Communication Methods
 
-### 1. Direct A2A Communication (Manual Orchestration)
+### 1. True HTTP-Based A2A (Google ADK A2A Protocol)
+
+**Script**: `demo_a2a_workflow.py`
+
+Uses Google ADK's A2A HTTP protocol for real agent-to-agent communication:
+
+```
+┌─────────────────┐    A2A HTTP     ┌─────────────────┐
+│  Buyer Agent    │◄───────────────►│ Supplier Agent  │
+│  (Port 8010)    │                 │  (Port 8011)    │
+└────────┬────────┘                 └────────┬────────┘
+         │                                   │
+         └───────────► NPL Engine ◄──────────┘
+```
+
+**Key Components**:
+- `A2aAgentExecutor` - Exposes an ADK agent as an A2A server
+- `RemoteA2aAgent` - Allows calling another agent via A2A
+- `AgentCard` - Agent metadata for discovery
+
+**Usage**:
+```bash
+python demo_a2a_workflow.py
+```
+
+**Features**:
+- Buyer and Supplier run as **separate HTTP servers**
+- Communication via **A2A protocol** (transfer_to_agent tool)
+- NPL governance within A2A context
+- Full message exchange visible in logs
+- Human-in-the-loop approval for high-value orders
+
+### 2. Orchestrated Simulation
 
 **Script**: `simulate_negotiation.py`
 
@@ -106,3 +138,43 @@ npl_commerce_Product_create(
 ```
 
 This makes it much easier for LLMs to use the tools correctly.
+
+## Protocol Memory System
+
+Agents can track and recall NPL protocol instances across conversation turns using the **Protocol Memory** system:
+
+```python
+from adk_npl import NPLProtocolMemory, create_memory_tools
+
+# Get memory for an agent
+memory = NPLProtocolMemory.get_instance("buyer_agent")
+
+# Create memory tools for the agent
+memory_tools = create_memory_tools("buyer_agent")
+# Returns 4 tools: recall_my_protocols, get_protocol_id, 
+#                  get_workflow_context, remember_protocol
+```
+
+**Memory Tools**:
+
+| Tool | Purpose |
+|------|---------|
+| `recall_my_protocols` | List all tracked protocols (optionally filtered) |
+| `get_protocol_id` | Get the most recent ID for a protocol type |
+| `get_workflow_context` | Get a summary of the current workflow state |
+| `remember_protocol` | Manually track a protocol from external source |
+
+**Example Usage in A2A**:
+
+```
+Buyer: remember_protocol("Offer", "abc-123", "published", "buyer")
+Buyer: transfer_to_agent → SupplierAgent (negotiate)
+Buyer: get_protocol_id("Offer")  → "abc-123"
+Buyer: npl_commerce_Offer_accept(instance_id="abc-123")
+```
+
+**Benefits**:
+- Prevents ID confusion during multi-turn conversations
+- Works across A2A transfers
+- Enables agents to maintain workflow context
+- Automatic tracking on protocol creation/actions

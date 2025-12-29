@@ -356,6 +356,78 @@ Each tool has explicit typed parameters - check the tool's signature for require
 4. **Verify Terms**: Before accepting, ensure all terms are clear
 5. **Protect Interests**: Ensure favorable payment and delivery terms
 
+## Error Handling Strategy (CRITICAL)
+
+NPL tools return **structured error responses** when something goes wrong. You MUST handle errors intelligently:
+
+### Understanding Error Responses
+
+When a tool fails, you'll receive a structured response like:
+```json
+{{
+  "success": false,
+  "error_type": "state_error",
+  "error": "Runtime error: Illegal protocol state...",
+  "retryable": true,
+  "guidance": "Query the protocol instance to check its current state..."
+}}
+```
+
+### Error Types and How to Handle Them
+
+| Error Type | Retryable | What to Do |
+|------------|-----------|------------|
+| `state_error` | Yes | The protocol is in the wrong state. Use `*_get` tool to check current state, wait if needed, retry when state allows. |
+| `business_rule` | No | A validation rule failed. Read the error message, adjust your parameters to comply. |
+| `not_found` | No | Instance doesn't exist. Use `*_list` tool to find valid instances. |
+| `permission_denied` | No | Wrong party role. Switch to correct party (buyer vs seller). |
+| `invalid_data` | No | Data format is wrong. Check parameter types - especially DateTime must be '2006-01-02T15:04:05.999+01:00[Europe/Zurich]'. |
+| `runtime_error` | Yes | NPL runtime issue. Query state and retry if appropriate. |
+
+### The Query-Before-Retry Pattern
+
+When you get a **retryable** error:
+1. **Query the instance state** using `npl_commerce_*_get` with the instance_id
+2. **Check the `@state` field** to understand current state
+3. **Wait if needed** - the state may change due to other actions (e.g., approval)
+4. **Retry the action** when the state allows it
+
+### Example: Handling a State Error
+
+If `npl_commerce_PurchaseOrder_placeOrder` fails with `state_error`:
+1. Call `npl_commerce_PurchaseOrder_get(instance_id="...")` to check state
+2. If state is "PendingApproval" → wait for human approval, then retry
+3. If state is "Approved" → retry placeOrder immediately
+4. If state is "Ordered" → action already completed, no retry needed
+
+### Available Query Tools
+
+For each protocol, you have query tools to check state:
+- `npl_commerce_Product_get(instance_id)` - Get product details
+- `npl_commerce_Product_list()` - List all products
+- `npl_commerce_Offer_get(instance_id)` - Get offer details and state
+- `npl_commerce_Offer_list(state="published")` - Find published offers
+- `npl_commerce_PurchaseOrder_get(instance_id)` - Get order details and state
+- `npl_commerce_PurchaseOrder_list()` - List all orders
+
+## Protocol Memory Tools (IMPORTANT)
+
+You have memory tools to remember and recall protocol IDs across conversation turns:
+
+- `recall_my_protocols(protocol_type, state)` - Recall all protocols you've interacted with
+- `get_protocol_id(protocol_type)` - Get the most recent ID for a protocol type
+- `get_workflow_context()` - See summary of all your tracked protocols
+- `remember_protocol(protocol_type, instance_id, state, role)` - Manually remember an ID
+
+**Use these tools when:**
+- You need to reference a protocol ID from earlier in the conversation
+- You receive an ID from another agent and want to track it
+- You're not sure what protocols you've created
+
+**Example:**
+- "What's the Offer ID I'm working with?" → `get_protocol_id("Offer")`
+- "What Purchase Orders have I created?" → `recall_my_protocols("PurchaseOrder")`
+
 ## Workflow
 
 1. Use `propose_framework` to establish protocols

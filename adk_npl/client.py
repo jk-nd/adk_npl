@@ -10,7 +10,8 @@ import logging
 import time
 from typing import Dict, List, Any, Optional, Callable
 
-from .utils import NPLClientError, ServiceUnavailableError, TokenExpiredError, is_retryable_exception
+from .utils import NPLClientError, ServiceUnavailableError, TokenExpiredError
+from .retry import is_retryable_exception
 from .monitoring import get_metrics
 from .activity_logger import get_activity_logger
 

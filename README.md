@@ -15,6 +15,8 @@ This project demonstrates how AI agents can autonomously initiate business trans
 - ✅ **Resilient Error Handling** - Automatic retries with exponential backoff, token refresh
 - ✅ **Monitoring & Observability** - Metrics collection, structured logging, health checks
 - ✅ **Activity Logging** - Real-time tracking of agent reasoning, tool calls, and state transitions
+- ✅ **Protocol Memory** - Agents can track and recall protocol IDs across conversation turns
+- ✅ **HTTP-Based A2A** - True agent-to-agent communication using Google ADK's A2A protocol
 
 ## Architecture
 
@@ -174,10 +176,22 @@ Demonstrates true agent-to-agent communication using Google ADK's A2A HTTP proto
          └───────────► NPL Engine ◄──────────┘
 ```
 
+**Key Features**:
 - Buyer and Supplier run as **separate HTTP servers**
-- Communication via **A2A protocol** (not script orchestration)
-- NPL tools work within A2A context for governance
-- Full message exchange visible in logs
+- Communication via **A2A protocol** (`transfer_to_agent` tool)
+- **Protocol Memory** - Agents remember offer IDs across A2A transfers
+- **Autonomous Agents** - Agents retry actions until NPL state allows
+- NPL governance enforced within A2A context
+- Human-in-the-loop approval for high-value orders
+
+**Demo Flow**:
+1. Supplier creates Product and Offer → publishes
+2. Buyer negotiates with Supplier via A2A (`transfer_to_agent`)
+3. Buyer accepts offer (uses `remember_protocol` to track ID)
+4. Buyer creates PurchaseOrder → high-value triggers approval
+5. Human approves via UI → NPL state transitions to `Approved`
+6. Buyer autonomously places order (retries until state allows)
+7. Supplier autonomously ships order
 
 *Note: These scripts run multiple LLM requests. If using a free tier Gemini API key, you may hit rate limits (429).*
 
@@ -294,6 +308,7 @@ adk-demo/
 │   ├── agent_builder.py        # Convenience agent creation
 │   ├── monitoring.py           # Metrics, logging, health checks
 │   ├── activity_logger.py      # Activity logging (JSON logs + in-memory buffer)
+│   ├── protocol_memory.py      # Protocol memory for tracking instances across turns
 │   ├── retry.py                # Retry utilities with exponential backoff
 │   └── utils.py                # Error classes and utilities
 │
