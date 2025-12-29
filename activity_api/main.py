@@ -356,6 +356,15 @@ async def get_metrics_summary() -> Dict[str, Any]:
                         if latency > 0:
                             a2a_latencies.append(latency)
                     
+                    # A2A message metrics (detailed HTTP)
+                    if event_type == 'a2a_message':
+                        a2a_transfers_total += 1
+                        from_agent = details.get('from_agent', actor)
+                        a2a_by_agent[from_agent] += 1
+                        latency = details.get('latency_ms', 0)
+                        if latency and latency > 0:
+                            a2a_latencies.append(latency)
+                    
                     # NPL API call metrics
                     if event_type == 'npl_api':
                         npl_calls_total += 1
@@ -402,6 +411,38 @@ async def get_metrics_summary() -> Dict[str, Any]:
                         "p99": values[int(len(values) * 0.99)] if len(values) > 1 else values[0]
                     }
                 }
+        
+        # Add LLM latency stats
+        if llm_latencies:
+            llm_latencies.sort()
+            latency_stats["llm_api_latency"] = {
+                "": {
+                    "count": len(llm_latencies),
+                    "sum": sum(llm_latencies),
+                    "avg": sum(llm_latencies) / len(llm_latencies),
+                    "min": min(llm_latencies),
+                    "max": max(llm_latencies),
+                    "p50": llm_latencies[int(len(llm_latencies) * 0.50)],
+                    "p95": llm_latencies[int(len(llm_latencies) * 0.95)] if len(llm_latencies) > 1 else llm_latencies[0],
+                    "p99": llm_latencies[int(len(llm_latencies) * 0.99)] if len(llm_latencies) > 1 else llm_latencies[0]
+                }
+            }
+        
+        # Add A2A latency stats
+        if a2a_latencies:
+            a2a_latencies.sort()
+            latency_stats["a2a_transfer_latency"] = {
+                "": {
+                    "count": len(a2a_latencies),
+                    "sum": sum(a2a_latencies),
+                    "avg": sum(a2a_latencies) / len(a2a_latencies),
+                    "min": min(a2a_latencies),
+                    "max": max(a2a_latencies),
+                    "p50": a2a_latencies[int(len(a2a_latencies) * 0.50)],
+                    "p95": a2a_latencies[int(len(a2a_latencies) * 0.95)] if len(a2a_latencies) > 1 else a2a_latencies[0],
+                    "p99": a2a_latencies[int(len(a2a_latencies) * 0.99)] if len(a2a_latencies) > 1 else a2a_latencies[0]
+                }
+            }
         
         # Build enhanced metrics
         llm_calls = None

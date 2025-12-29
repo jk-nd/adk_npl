@@ -295,6 +295,29 @@ This project uses **explicit party binding** with `@parties` at protocol creatio
 
 4. **Observers**: Protocol parties automatically have read access. Add observers only for non-party readers.
 
+### Multi-Party Protocols (e.g., PurchaseOrder)
+
+For protocols with multiple parties (buyer, seller, approver), **LLM agents must be explicitly instructed** to pass all party parameters:
+
+```python
+# Example: PurchaseOrder requires 3 parties
+po_prompt = """
+Create a purchase order with these party parameters:
+- buyer_organization: "Acme Corp"
+- buyer_department: "Procurement"
+- seller_organization: "Supplier Inc"
+- seller_department: "Sales"
+- approver_organization: "Acme Corp"
+- approver_department: "Finance"
+"""
+```
+
+**Why this is necessary:**
+- NPL protocols don't expose party parameters in their OpenAPI spec
+- The ADK tool generator creates `*_organization` and `*_department` parameters for each party role
+- LLMs need explicit parameter names in their prompts to pass them correctly
+- Without all parties bound, agents from other realms will get 404 errors when trying to access the protocol
+
 ## Project Structure
 
 ```

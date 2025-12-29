@@ -44,6 +44,8 @@ from google.adk.sessions.in_memory_session_service import InMemorySessionService
 from google.adk.tools import FunctionTool
 
 import uvicorn
+import httpx
+import time as time_module
 
 # Local imports
 from adk_npl import NPLConfig, get_activity_logger
@@ -53,6 +55,207 @@ from supplier_agent import create_supplier_agent
 load_dotenv()
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# A2A message tracking
+_a2a_request_times: Dict[int, float] = {}
+
+def log_a2a_request(request: httpx.Request):
+    """Log outgoing A2A HTTP requests."""
+    url = str(request.url)
+    # Only log A2A requests (to ports 8010, 8011)
+    if ":8010" in url or ":8011" in url:
+        _a2a_request_times[id(request)] = time_module.time()
+        to_agent = "supplier" if ":8011" in url else "buyer"
+        from_agent = "buyer" if ":8011" in url else "supplier"
+        
+        # Try to extract message preview from request body
+        message_preview = None
+        full_message = None
+        try:
+            if request.content:
+                import json
+                body = json.loads(request.content.decode('utf-8'))
+                
+                text = None
+                
+                # Try different A2A message formats
+                # 1. Standard message parts - check params.message.parts
+                params_message = body.get('params', {}).get('message', {})
+                parts = params_message.get('parts', [])
+                if parts:
+                    # Get the LAST text part (most recent message) - iterate in reverse
+                    for part in reversed(parts):
+                        if 'text' in part:
+                            text = part['text']
+                            # Skip internal tool messages
+                            if text and not text.startswith('[') and not 'tool returned result' in text:
+                                break  # Found the newest, stop
+                            text = None  # Reset if it was an internal message
+                
+                # 1b. Also check params.message directly (some A2A formats)
+                if not text:
+                    text = params_message.get('text')
+                    if text and (text.startswith('[') or 'tool returned result' in text):
+                        text = None  # Skip internal messages
+                
+                # 2. Check for task result/response format
+                if not text:
+                    result = body.get('result', {})
+                    if result:
+                        artifacts = result.get('artifacts', [])
+                        # Get the LAST artifact (most recent)
+                        for artifact in reversed(artifacts):
+                            parts = artifact.get('parts', [])
+                            # Get the LAST part (newest message)
+                            for part in reversed(parts):
+                                if 'text' in part:
+                                    text = part['text']
+                                    break
+                            if text:
+                                break
+                
+                # 3. Direct text field in params.message
+                if not text:
+                    text = params_message.get('text')
+                    if text and (text.startswith('[') or 'tool returned result' in text):
+                        text = None
+                
+                # 4. Check params.content (alternative A2A format)
+                if not text:
+                    text = body.get('params', {}).get('content')
+                    if isinstance(text, str) and (text.startswith('[') or 'tool returned result' in text):
+                        text = None
+                
+                # 5. Check for nested message in task/request structure
+                if not text:
+                    task = body.get('task', {}) or body.get('request', {})
+                    if task:
+                        msg = task.get('message', {})
+                        parts = msg.get('parts', []) if isinstance(msg, dict) else []
+                        if parts:
+                            for part in reversed(parts):
+                                if 'text' in part:
+                                    text = part['text']
+                                    if text and not text.startswith('[') and not 'tool returned result' in text:
+                                        break
+                                    text = None
+                
+                if text:
+                    # Skip very short or generic messages that aren't the actual user message
+                    if len(text.strip()) < 10 or text.strip().lower() in ['for context:', 'context:', 'message:']:
+                        text = None
+                
+                if text:
+                    # Store full message (first 500 chars for tooltip)
+                    full_message = text.replace('\n', ' ').strip()[:500]
+                    # Truncate to first 80 chars for preview
+                    message_preview = text.replace('\n', ' ').strip()[:80]
+                    if len(text) > 80:
+                        message_preview += "..."
+        except Exception as e:
+            # Log error for debugging but don't fail
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.debug(f"Error extracting A2A message: {e}")
+            pass
+        
+        activity_logger = get_activity_logger()
+        activity_logger.log_a2a_message(
+            direction="send",
+            from_agent=f"{from_agent}_agent",
+            to_agent=f"{to_agent}_agent",
+            url=url,
+            message_preview=message_preview,
+            full_message=full_message
+        )
+
+def log_a2a_response(response: httpx.Response):
+    """Log incoming A2A HTTP responses."""
+    url = str(response.request.url)
+    # Only log A2A responses
+    if ":8010" in url or ":8011" in url:
+        latency = None
+        req_id = id(response.request)
+        if req_id in _a2a_request_times:
+            latency = (time_module.time() - _a2a_request_times.pop(req_id)) * 1000
+        
+        to_agent = "supplier" if ":8011" in url else "buyer"
+        from_agent = "buyer" if ":8011" in url else "supplier"
+        
+        # Try to extract response message
+        message_preview = None
+        full_message = None
+        try:
+            content = response.content
+            if content:
+                import json
+                body = json.loads(content.decode('utf-8'))
+                
+                text = None
+                
+                # Check result artifacts (agent response)
+                result = body.get('result', {})
+                if result:
+                    artifacts = result.get('artifacts', [])
+                    # Get the LAST artifact (most recent response)
+                    for artifact in reversed(artifacts):
+                        parts = artifact.get('parts', [])
+                        # Get the LAST part (newest message)
+                        for part in reversed(parts):
+                            if 'text' in part:
+                                text = part['text']
+                                break
+                        if text:
+                            break
+                
+                # Check message parts
+                if not text:
+                    message = result.get('message', {}) or body.get('message', {})
+                    parts = message.get('parts', [])
+                    # Get the LAST part (newest message)
+                    for part in reversed(parts):
+                        if 'text' in part:
+                            text = part['text']
+                            break
+                
+                if text:
+                    full_message = text.replace('\n', ' ').strip()[:500]
+                    message_preview = text.replace('\n', ' ').strip()[:80]
+                    if len(text) > 80:
+                        message_preview += "..."
+        except Exception:
+            pass
+        
+        activity_logger = get_activity_logger()
+        activity_logger.log_a2a_message(
+            direction="receive",
+            from_agent=f"{to_agent}_agent",
+            to_agent=f"{from_agent}_agent",
+            url=url,
+            status_code=response.status_code,
+            latency_ms=latency,
+            message_preview=message_preview,
+            full_message=full_message
+        )
+
+# Install httpx hooks globally
+_original_send = httpx.Client.send
+_original_async_send = httpx.AsyncClient.send
+
+def _patched_send(self, request, **kwargs):
+    log_a2a_request(request)
+    response = _original_send(self, request, **kwargs)
+    log_a2a_response(response)
+    return response
+
+async def _patched_async_send(self, request, **kwargs):
+    log_a2a_request(request)
+    response = await _original_async_send(self, request, **kwargs)
+    log_a2a_response(response)
+    return response
+
+httpx.Client.send = _patched_send
+httpx.AsyncClient.send = _patched_async_send
 
 # Configuration
 ENGINE_URL = os.getenv("ENGINE_URL", "http://localhost:12000")
@@ -381,10 +584,13 @@ async def main():
         print(f"   🤖 {agent_name} running autonomously with objective...")
         
         for iteration in range(max_iterations):
-            # Check if condition is already met
-            if await check_condition():
-                print(f"   ✅ {agent_name} objective completed")
-                return True
+            # Check if condition is already met (before starting turn)
+            try:
+                if await check_condition():
+                    print(f"   ✅ {agent_name} objective completed (condition met before turn)")
+                    return True
+            except Exception as e:
+                print(f"   ⚠️  Error checking condition before turn: {e}")
             
             # Agent checks state and decides what to do
             prompt = f"""
@@ -402,58 +608,62 @@ check the state and retry when appropriate.
             
             content = types.Content(role="user", parts=[types.Part(text=prompt)])
             
-            async for event in runner.run_async(
-                new_message=content,
-                user_id=user_id,
-                session_id=session_id
-            ):
-                if hasattr(event, "content") and hasattr(event.content, "parts"):
-                    for part in event.content.parts:
-                        if hasattr(part, "text") and part.text:
-                            response_parts.append(part.text)
-                            activity_logger.log_agent_reasoning(
-                                actor=agent_name,
-                                reasoning=part.text,
-                                context={"iteration": iteration + 1, "autonomous": True}
-                            )
-                        if hasattr(part, "function_call") and part.function_call:
-                            func = part.function_call
-                            tool_calls.append(func.name)
-                            activity_logger.log_agent_action(
-                                agent=agent_name,
-                                action=func.name,
-                                protocol="autonomous",
-                                protocol_id=None,
-                                outcome="called"
-                            )
-                        if hasattr(part, "function_response") and part.function_response:
-                            resp = part.function_response
-                            result = getattr(resp, "response", None)
-                            # Detect NPL errors
-                            if isinstance(result, dict):
-                                error_msg = result.get("message") or result.get("error") or result.get("errorType")
-                                if error_msg:
-                                    error_lower = str(error_msg).lower()
-                                    if any(keyword in error_lower for keyword in [
-                                        "illegal protocol state",
-                                        "current state is not",
-                                        "business rule",
-                                        "assertion",
-                                        "runtime error",
-                                        "r13", "r14", "r15"
-                                    ]):
-                                        npl_errors_detected.append(error_msg)
-                                        print(f"   ⚠️  NPL Rejection detected: {error_msg[:100]}")
-                                        activity_logger.log_event(
-                                            event_type="npl_rejection",
-                                            actor=agent_name,
-                                            action=getattr(resp, "name", "unknown"),
-                                            details={
-                                                "error": error_msg,
-                                                "iteration": iteration + 1
-                                            },
-                                            level="warning"
-                                        )
+            try:
+                async for event in runner.run_async(
+                    new_message=content,
+                    user_id=user_id,
+                    session_id=session_id
+                ):
+                    if hasattr(event, "content") and hasattr(event.content, "parts"):
+                        for part in event.content.parts:
+                            if hasattr(part, "text") and part.text:
+                                response_parts.append(part.text)
+                                activity_logger.log_agent_reasoning(
+                                    actor=agent_name,
+                                    reasoning=part.text,
+                                    context={"iteration": iteration + 1, "autonomous": True}
+                                )
+                            if hasattr(part, "function_call") and part.function_call:
+                                func = part.function_call
+                                tool_calls.append(func.name)
+                                activity_logger.log_agent_action(
+                                    agent=agent_name,
+                                    action=func.name,
+                                    protocol="autonomous",
+                                    protocol_id=None,
+                                    outcome="called"
+                                )
+                            if hasattr(part, "function_response") and part.function_response:
+                                resp = part.function_response
+                                result = getattr(resp, "response", None)
+                                # Detect NPL errors
+                                if isinstance(result, dict):
+                                    error_msg = result.get("message") or result.get("error") or result.get("errorType")
+                                    if error_msg:
+                                        error_lower = str(error_msg).lower()
+                                        if any(keyword in error_lower for keyword in [
+                                            "illegal protocol state",
+                                            "current state is not",
+                                            "business rule",
+                                            "assertion",
+                                            "runtime error",
+                                            "r13", "r14", "r15"
+                                        ]):
+                                            npl_errors_detected.append(error_msg)
+                                            print(f"   ⚠️  NPL Rejection detected: {error_msg[:100]}")
+                                            activity_logger.log_event(
+                                                event_type="npl_rejection",
+                                                actor=agent_name,
+                                                action=getattr(resp, "name", "unknown"),
+                                                details={
+                                                    "error": error_msg,
+                                                    "iteration": iteration + 1
+                                                },
+                                                level="warning"
+                                            )
+            except Exception as e:
+                print(f"   ⚠️  Error during agent turn: {e}")
+                # Continue to next iteration even if there was an error
             
             # Log LLM call
             total_time = (time.time() - turn_start) * 1000
@@ -467,10 +677,15 @@ check the state and retry when appropriate.
                 iteration=iteration + 1
             )
             
-            # Check if condition is now met
-            if await check_condition():
-                print(f"   ✅ {agent_name} objective completed after {iteration + 1} iteration(s)")
-                return True
+            # Check if condition is now met (after turn completes)
+            try:
+                condition_result = await check_condition()
+                if condition_result:
+                    print(f"   ✅ {agent_name} objective completed after {iteration + 1} iteration(s)")
+                    return True
+            except Exception as e:
+                print(f"   ⚠️  Error checking condition after turn: {e}")
+                # Continue to next iteration
             
             # Wait before next check
             if iteration < max_iterations - 1:
@@ -658,21 +873,20 @@ check the state and retry when appropriate.
     )
     
     product_prompt = f"""
-Create a Product for "Industrial Pump X" - a high-performance industrial water pump.
+You need to create a product listing for: Industrial Pump X
 
-Product details:
-- Name: "Industrial Pump X"
-- Description: "High-performance industrial water pump"
-- SKU: "PUMP-X-A2A"
-- GTIN: "0123456789012"
-- Brand: "PumpCo"
-- Category: "Industrial Equipment"
+Product specifications:
+- Name: Industrial Pump X
+- Description: High-performance industrial water pump
+- SKU: PUMP-X-A2A
+- GTIN: 0123456789012
+- Brand: PumpCo
+- Category: Industrial Equipment
 - Condition: New
 
-Use your available NPL tools to create the product. Check the tool signatures to see what parameters are required.
-Your organization is Supplier Inc, Sales department (from your base instructions).
+Create this product listing. You have tools available - discover which ones help you create products and use them appropriately.
 
-Report the product ID after creation.
+Report the product ID when created.
 """
     _, _, tool_results, product_id = await run_agent_turn(
         supplier_runner, product_prompt, "supplier_user", "supplier_session",
@@ -706,18 +920,31 @@ Report the product ID after creation.
     # =========================================================================
     print("💰 Step 2: Supplier creates and publishes Offer...")
     
+    # Generate properly formatted dates for the offer
+    from datetime import datetime, timedelta
+    now = datetime.now()
+    valid_from = now.strftime("%Y-%m-%dT%H:%M:%S.000Z")
+    valid_through = (now + timedelta(days=30)).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+    
     offer_prompt = f"""
-Create and publish an Offer for product {product_id}:
+You need to create and publish a sales offer for product {product_id}.
 
 Offer terms:
 - Price: $1200 per unit
 - Available quantity: 100 units
 - Delivery lead time: 14 days
-- Valid for 30 days from now
+- Valid from {valid_from} through {valid_through}
+
+Parties (for seller and buyer parameters):
+- Seller: Your organization (Supplier Inc, Sales department)
 - Buyer: Acme Corp, Procurement department
 
-Use your NPL tools to create and publish the offer. Check tool signatures for required parameters.
-Your organization is Supplier Inc, Sales department.
+Create the offer and publish it so buyers can see it. 
+Use your available tools - check the tool signatures for required party parameters.
+
+Note: Date fields require format: "{valid_from}" (use these exact values).
+
+Report the Offer ID when published.
 """
     full_text, tool_calls, tool_results, offer_id = await run_agent_turn(
         supplier_runner, offer_prompt, "supplier_user", "supplier_session",
@@ -802,22 +1029,15 @@ Your organization is Supplier Inc, Sales department.
     print("=" * 80)
     print()
     
+    # Step 3a: A2A negotiation with supplier
     a2a_prompt = f"""
-I want to purchase Industrial Pump X. The offer ID is: {offer_id}
+Negotiate terms for offer {offer_id} (Industrial Pump X, 10 units, currently $1200/unit).
 
-IMPORTANT: Use remember_protocol("Offer", "{offer_id}", "published", "buyer") to store this offer ID in your memory first!
-
-Then contact the SupplierAgent to negotiate terms (volume discount, better price, etc.) using the transfer_to_agent tool.
-
-After negotiation is complete, you MUST accept the offer to proceed:
-1. Use get_protocol_id("Offer") to recall the offer ID from memory
-2. Check the offer state with npl_commerce_Offer_get
-3. If state is "published", accept it with npl_commerce_Offer_accept(instance_id="{offer_id}", party="buyer")
-
-DO NOT create new offers during negotiation - just negotiate and then accept the existing offer {offer_id}.
-If the supplier mentions a different offer ID, use remember_protocol to store it, then accept that one.
+Contact the supplier to explore volume discounts and finalize terms.
+Budget: $12,000 total. Target: Get best price possible.
+Maximum 3 rounds of communication.
 """
-    
+
     activity_logger.log_event(
         event_type="a2a_demo",
         actor="buyer_agent",
@@ -831,9 +1051,37 @@ If the supplier mentions a different offer ID, use remember_protocol to store it
         "buyer_agent", "a2a_negotiation"
     )
     
-    # Check if agent tried to accept the offer by looking at tool calls
+    print(f"   💬 buyer_agent: {full_text[:150]}..." if len(full_text) > 150 else f"   💬 buyer_agent: {full_text}")
+    print()
+    
+    # Step 3b: Accept the offer (in fresh session to avoid A2A context)
+    print("📝 Step 3b: Buyer accepts the offer...")
+    
+    # Create fresh session for accept
+    await session_service.create_session(
+        app_name="buyer_a2a",
+        user_id="accept_user",
+        session_id="accept_fresh_session"
+    )
+    
+    accept_prompt = f"""
+The negotiation with the supplier is complete. The terms are acceptable within budget.
+
+Now finalize the purchase by accepting offer {offer_id}.
+Use your available tools to complete this action.
+"""
+    
+    full_text, accept_tools, tool_results, _ = await run_agent_turn(
+        buyer_runner, accept_prompt, "accept_user", "accept_fresh_session",  # Fresh session
+        "buyer_agent", "accept_offer"
+    )
+    
+    print(f"   💬 buyer_agent: {full_text[:100]}..." if len(full_text) > 100 else f"   💬 buyer_agent: {full_text}")
+    
+    # Track which offer was accepted
     accepted_offer_id = offer_id
-    if "accept" in str(a2a_tools).lower() or "npl_commerce_Offer_accept" in str(a2a_tools):
+    accept_attempted = "npl_commerce_Offer_accept" in str(accept_tools)
+    if accept_attempted:
         print("   ℹ️  Buyer agent attempted to accept offer")
         # Check tool results for any new offer IDs if supplier created one
         for name, result in tool_results.items():
@@ -895,7 +1143,7 @@ If the supplier mentions a different offer ID, use remember_protocol to store it
     else:
         print(f"   ⚠️  Offer state is {offer_state}, expected 'accepted'")
         print(f"   ℹ️  Agent should have accepted the offer - NPL may have rejected the action")
-        print(f"   ℹ️  Tool calls made: {a2a_tools}")
+        print(f"   ℹ️  Tool calls made: {accept_tools}")
     
     # If offer wasn't accepted, we can't continue
     if offer_state != "accepted":
@@ -909,27 +1157,43 @@ If the supplier mentions a different offer ID, use remember_protocol to store it
     # =========================================================================
     print("📋 Step 4: Buyer creates PurchaseOrder...")
     
+    # Create fresh session for PO creation
+    await session_service.create_session(
+        app_name="buyer_a2a",
+        user_id="po_user",
+        session_id="po_creation_session"
+    )
+    
     quantity = 10
     unit_price = 1200.0
     total = quantity * unit_price
     order_number = f"PO-A2A-{datetime.now().strftime('%H%M%S')}"
     
     po_prompt = f"""
-Create a PurchaseOrder for the accepted offer {offer_id}:
+You are the Purchasing Agent for Acme Corp.
+
+Create a purchase order for the accepted offer {offer_id}.
 
 Order details:
 - Order number: {order_number}
 - Quantity: {quantity} units
 - Unit price: ${unit_price}
-- Total: ${total}
-- Seller: Supplier Inc, Sales department
-- Approver: Acme Corp, Finance department
+- Total value: ${total}
 
-Use your NPL tools to create the purchase order. Check tool signatures for required parameters.
-Your organization is Acme Corp, Procurement department (from your base instructions).
+CRITICAL - You MUST specify all THREE parties using these exact parameters:
+- buyer_organization: "Acme Corp"
+- buyer_department: "Procurement"
+- seller_organization: "Supplier Inc"
+- seller_department: "Sales"
+- approver_organization: "Acme Corp"  
+- approver_department: "Finance"
+
+Use your available PurchaseOrder creation tools and pass ALL party parameters explicitly.
+
+Report the order ID when created.
 """
     full_text, tool_calls, tool_results, po_id = await run_agent_turn(
-        buyer_runner, po_prompt, "buyer_user", "negotiation_session",
+        buyer_runner, po_prompt, "po_user", "po_creation_session",
         "buyer_agent", "po_create"
     )
     
@@ -1032,15 +1296,24 @@ The order ID is: {po_id}
     # =========================================================================
     print("💵 Step 5: Supplier submits quote...")
     
+    # Create fresh session for quote submission
+    await session_service.create_session(
+        app_name="supplier_a2a",
+        user_id="quote_user",
+        session_id="quote_submission_session"
+    )
+    
     submit_prompt = f"""
+You are the Supplier Agent for Supplier Inc.
+
 A buyer has created PurchaseOrder {po_id} for 10 units at $1200 per unit (total: $12,000).
 
 Review the purchase order and submit your quote. This is a high-value order, so it will require approval.
 
-Use your NPL tools to submit the quote. Your organization is Supplier Inc, Sales department.
+Use your available tools to submit the quote. Report when complete.
 """
     await run_agent_turn(
-        supplier_runner, submit_prompt, "supplier_user", "supplier_session",
+        supplier_runner, submit_prompt, "quote_user", "quote_submission_session",
         "supplier_agent", "submit_quote"
     )
     
@@ -1087,25 +1360,30 @@ The order ID is: {po_id}
     async def supplier_autonomous_task():
         supplier_client = await get_authenticated_client("supplier", "supplier_agent")
         async def supplier_condition_met():
-            order_data = buyer_client.get_instance(
-                package="commerce",
-                protocol_name="PurchaseOrder",
-                instance_id=po_id
-            )
-            state = order_data.get("@state") or order_data.get("state")
-            if state == "Shipped":
-                tracking_used = order_data.get("trackingNumber") or order_data.get("tracking")
-                if tracking_used:
-                    print(f"   📦 Tracking: {tracking_used}")
-                activity_logger.log_state_transition(
-                    protocol="PurchaseOrder",
-                    protocol_id=po_id,
-                    from_state="Ordered",
-                    to_state="Shipped",
-                    triggered_by="supplier_agent"
+            try:
+                order_data = supplier_client.get_instance(
+                    package="commerce",
+                    protocol_name="PurchaseOrder",
+                    instance_id=po_id
                 )
-                return True
-            return False
+                state = order_data.get("@state") or order_data.get("state")
+                if state == "Shipped":
+                    tracking_used = order_data.get("trackingNumber") or order_data.get("tracking")
+                    if tracking_used:
+                        print(f"   📦 Tracking: {tracking_used}")
+                    activity_logger.log_state_transition(
+                        protocol="PurchaseOrder",
+                        protocol_id=po_id,
+                        from_state="Ordered",
+                        to_state="Shipped",
+                        triggered_by="supplier_agent"
+                    )
+                    return True
+                return False
+            except Exception as e:
+                # If we can't check state, assume not done yet
+                print(f"   ⚠️  Error checking supplier condition: {e}")
+                return False
         
         await run_autonomous_agent(
             runner=supplier_runner,

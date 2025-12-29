@@ -32,15 +32,21 @@ const eventTypeIcons: Record<string, { icon: string; class: string }> = {
   authentication: { icon: '●', class: 'icon-auth' },
   bridge_operation: { icon: '▪', class: 'icon-bridge' },
   demo: { icon: '▸', class: 'icon-demo' },
+  llm_call: { icon: '◎', class: 'icon-llm' },
   // A2A events
   a2a_demo: { icon: '⇄', class: 'icon-a2a' },
   a2a_transfer: { icon: '⇢', class: 'icon-a2a' },
   a2a_response: { icon: '⇠', class: 'icon-a2a' },
+  a2a_message: { icon: '↔', class: 'icon-a2a-message' },
 };
+
+// A2A message types that are hidden by default
+const A2A_VERBOSE_TYPES = ['a2a_message'];
 
 export function ActivityLog() {
   const [filter, setFilter] = useState<'all' | string>('all');
   const [autoRefresh, setAutoRefresh] = useState(true);
+  const [showA2ADetails, setShowA2ADetails] = useState(false);
 
   // Fetch recent activity
   const { data: events, refetch } = useQuery<ActivityEvent[]>({
@@ -96,6 +102,14 @@ export function ActivityLog() {
             />
             <span>Auto</span>
           </label>
+          <label className="a2a-toggle" title="Show detailed A2A HTTP messages">
+            <input
+              type="checkbox"
+              checked={showA2ADetails}
+              onChange={(e) => setShowA2ADetails(e.target.checked)}
+            />
+            <span>A2A Details</span>
+          </label>
           <select className="compact-filter" value={filter} onChange={(e) => setFilter(e.target.value)}>
             <option value="all">All Events</option>
             <option value="agent_action">Agent Actions</option>
@@ -130,7 +144,9 @@ export function ActivityLog() {
               </tr>
             </thead>
             <tbody>
-              {events.map((event, index) => {
+              {events
+                .filter(event => showA2ADetails || !A2A_VERBOSE_TYPES.includes(event.event_type))
+                .map((event, index) => {
                 const iconInfo = eventTypeIcons[event.event_type] || { icon: '•', class: 'icon-default' };
                 return (
                   <tr key={index} className={`event-row ${getLevelClass(event.level)}`}>
@@ -155,6 +171,16 @@ export function ActivityLog() {
                       <span className="message-text">
                         <strong>To {event.details.to}:</strong> {event.details.message}
                       </span>
+                    ) : event.event_type === 'a2a_message' && event.details?.message_preview ? (
+                      <details className="a2a-message-details">
+                        <summary className="a2a-message-summary">
+                          <strong>{event.details.direction === 'send' ? '→' : '←'} {event.details.to_agent}:</strong> 
+                          <span className="a2a-preview">{event.details.message_preview}</span>
+                        </summary>
+                        <div className="a2a-full-message">
+                          {event.details.full_message || event.details.message_preview}
+                        </div>
+                      </details>
                     ) : (
                       event.action
                     )}

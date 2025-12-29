@@ -306,6 +306,42 @@ class ActivityLogger:
         level = "info" if success else "error"
         self.log_event("a2a_transfer", from_agent, f"transfer_to_{to_agent}", details, level)
     
+    def log_a2a_message(
+        self,
+        direction: str,  # "send" or "receive"
+        from_agent: str,
+        to_agent: str,
+        url: str,
+        status_code: Optional[int] = None,
+        latency_ms: Optional[float] = None,
+        message_preview: Optional[str] = None,
+        **kwargs
+    ):
+        """
+        Log a detailed A2A HTTP message.
+        
+        Args:
+            direction: "send" or "receive"
+            from_agent: Agent sending the message
+            to_agent: Agent receiving the message  
+            url: The A2A endpoint URL
+            status_code: HTTP status code (for responses)
+            latency_ms: Round-trip time
+            message_preview: Preview of message content
+        """
+        details = {
+            "direction": direction,
+            "from_agent": from_agent,
+            "to_agent": to_agent,
+            "url": url,
+            "status_code": status_code,
+            "latency_ms": round(latency_ms, 2) if latency_ms else None,
+            "message_preview": message_preview[:200] if message_preview else None,
+            **kwargs
+        }
+        action = f"{'→' if direction == 'send' else '←'} {to_agent}" if direction == 'send' else f"{'←'} {from_agent}"
+        self.log_event("a2a_message", from_agent, action, details, "info")
+    
     def get_recent_events(self, limit: int = 100) -> List[Dict[str, Any]]:
         """Get recent events from buffer."""
         with self.buffer_lock:
