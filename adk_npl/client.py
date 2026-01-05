@@ -31,7 +31,8 @@ class NPLClient:
         auth_token: Optional[str] = None,
         max_retries: int = 3,
         timeout: float = 30.0,
-        token_refresh_callback: Optional[Callable[[], str]] = None
+        token_refresh_callback: Optional[Callable[[], str]] = None,
+        caller_id: Optional[str] = None
     ):
         """
         Initialize NPL Engine client.
@@ -42,12 +43,14 @@ class NPLClient:
             max_retries: Maximum number of retries for failed requests (default: 3)
             timeout: Request timeout in seconds (default: 30.0)
             token_refresh_callback: Optional callback to refresh expired tokens
+            caller_id: Optional identifier for the caller (for activity logging)
         """
         self.base_url = base_url.rstrip('/')
         self.auth_token = auth_token
         self.max_retries = max_retries
         self.timeout = timeout
         self.token_refresh_callback = token_refresh_callback
+        self.caller_id = caller_id
         self.session = requests.Session()
         
         if auth_token:
@@ -159,12 +162,23 @@ class NPLClient:
                 metrics.increment("npl.api.calls", method=method, status_code=response.status_code)
                 metrics.record_latency("npl.api.latency", attempt_latency, method=method)
                 
-                # Log activity
+                # Log activity (capture request and response bodies)
+                request_body = kwargs.get('json', kwargs.get('data'))
+                response_body = None
+                try:
+                    if response.content and response.headers.get('content-type', '').startswith('application/json'):
+                        response_body = response.json()
+                except Exception:
+                    pass  # Skip if response is not JSON or empty
+                
                 activity_logger.log_npl_api_call(
                     method=method,
                     endpoint=url.replace(self.base_url, ""),
                     status_code=response.status_code,
-                    response_time=attempt_latency
+                    response_time=attempt_latency,
+                    request_body=request_body,
+                    response_body=response_body,
+                    caller=self.caller_id or "unknown"
                 )
                 if attempt > 0:
                     metrics.record_latency("npl.api.latency_with_retries", overall_latency, method=method)
@@ -194,12 +208,15 @@ class NPLClient:
                         method=method
                     )
                     # Log error activity
+                    request_body = kwargs.get('json', kwargs.get('data'))
                     activity_logger.log_npl_api_call(
                         method=method,
                         endpoint=url.replace(self.base_url, ""),
                         status_code=response.status_code,
                         response_time=attempt_latency,
-                        error=f"HTTP {response.status_code}"
+                        error=f"HTTP {response.status_code}",
+                        request_body=request_body,
+                        caller=self.caller_id or "unknown"
                     )
                     self._handle_response_error(response, url)
                 

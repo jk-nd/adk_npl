@@ -28,6 +28,30 @@ interface MetricsSummary {
     by_action: Record<string, number>;
     avg_latency_ms: number;
   };
+  // New metrics
+  agent_tool_calls?: {
+    total: number;
+    by_agent: Record<string, number>;
+    by_tool: Record<string, number>;
+    avg_latency_ms: number;
+    success_rate: number;
+  };
+  notifications?: {
+    total_received: number;
+    total_processed: number;
+    by_agent: Record<string, number>;
+    by_type: Record<string, number>;
+    avg_processing_time_ms: number;
+    success_rate: number;
+  };
+  a2a_messages?: {
+    total_sent: number;
+    total_received: number;
+    total_errors: number;
+    by_route: Record<string, number>;
+    avg_roundtrip_ms: number;
+    success_rate: number;
+  };
   timestamp: string;
 }
 
@@ -113,14 +137,38 @@ export function MetricsDashboard() {
             )}
           </div>
         </div>
+        <div className="metric-card tool-calls">
+          <div className="metric-icon">🔧</div>
+          <div className="metric-content">
+            <div className="metric-label">Agent Tool Calls</div>
+            <div className="metric-value">{metrics?.agent_tool_calls?.total || 0}</div>
+            {metrics?.agent_tool_calls?.success_rate !== undefined && (
+              <div className="metric-sublabel">
+                Success: {formatNumber(metrics.agent_tool_calls.success_rate * 100, 1)}%
+              </div>
+            )}
+          </div>
+        </div>
         <div className="metric-card a2a">
           <div className="metric-icon">⇄</div>
           <div className="metric-content">
-            <div className="metric-label">A2A Transfers</div>
-            <div className="metric-value">{metrics?.a2a_transfers?.total || 0}</div>
-            {metrics?.a2a_transfers?.avg_latency_ms && (
+            <div className="metric-label">A2A Messages</div>
+            <div className="metric-value">{metrics?.a2a_messages?.total_sent || 0}</div>
+            {metrics?.a2a_messages?.avg_roundtrip_ms && (
               <div className="metric-sublabel">
-                Avg: {formatDuration(metrics.a2a_transfers.avg_latency_ms)}
+                Avg: {formatDuration(metrics.a2a_messages.avg_roundtrip_ms)}
+              </div>
+            )}
+          </div>
+        </div>
+        <div className="metric-card notifications">
+          <div className="metric-icon">🔔</div>
+          <div className="metric-content">
+            <div className="metric-label">Notifications</div>
+            <div className="metric-value">{metrics?.notifications?.total_received || 0}</div>
+            {metrics?.notifications?.success_rate !== undefined && (
+              <div className="metric-sublabel">
+                Success: {formatNumber(metrics.notifications.success_rate * 100, 1)}%
               </div>
             )}
           </div>
@@ -138,7 +186,7 @@ export function MetricsDashboard() {
           </div>
         </div>
         <div className="metric-card error">
-          <div className="metric-icon">◈</div>
+          <div className="metric-icon">⚠️</div>
           <div className="metric-content">
             <div className="metric-label">Errors</div>
             <div className="metric-value">{getTotalErrors()}</div>
@@ -165,21 +213,138 @@ export function MetricsDashboard() {
         </div>
       )}
 
-      {/* A2A Transfers by Agent */}
-      {metrics?.a2a_transfers?.by_agent && Object.keys(metrics.a2a_transfers.by_agent).length > 0 && (
+      {/* Agent Tool Calls */}
+      {metrics?.agent_tool_calls && (
         <div className="metrics-section">
           <details open className="section-details">
             <summary className="section-summary">
-              <h3>⇄ A2A Transfers by Agent</h3>
+              <h3>🔧 Agent Tool Calls</h3>
+              <span className="section-subtitle">
+                {metrics.agent_tool_calls.total} calls · 
+                {metrics.agent_tool_calls.avg_latency_ms && ` Avg ${formatDuration(metrics.agent_tool_calls.avg_latency_ms)} · `}
+                Success {formatNumber((metrics.agent_tool_calls.success_rate || 0) * 100, 1)}%
+              </span>
             </summary>
-            <div className="breakdown-grid">
-              {Object.entries(metrics.a2a_transfers.by_agent).map(([agent, count]) => (
-                <div key={agent} className="breakdown-item">
-                  <span className="breakdown-label">{agent}</span>
-                  <span className="breakdown-value">{count}</span>
+            {metrics.agent_tool_calls.by_agent && Object.keys(metrics.agent_tool_calls.by_agent).length > 0 && (
+              <>
+                <h4 className="subsection-title">By Agent</h4>
+                <div className="breakdown-grid">
+                  {Object.entries(metrics.agent_tool_calls.by_agent).map(([agent, count]) => (
+                    <div key={agent} className="breakdown-item">
+                      <span className="breakdown-label">{agent}</span>
+                      <span className="breakdown-value">{count}</span>
+                    </div>
+                  ))}
                 </div>
-              ))}
-            </div>
+              </>
+            )}
+            {metrics.agent_tool_calls.by_tool && Object.keys(metrics.agent_tool_calls.by_tool).length > 0 && (
+              <>
+                <h4 className="subsection-title">By Tool</h4>
+                <div className="breakdown-grid">
+                  {Object.entries(metrics.agent_tool_calls.by_tool)
+                    .sort(([, a], [, b]) => b - a)
+                    .slice(0, 10)
+                    .map(([tool, count]) => (
+                      <div key={tool} className="breakdown-item">
+                        <span className="breakdown-label">{tool}</span>
+                        <span className="breakdown-value">{count}</span>
+                      </div>
+                    ))}
+                </div>
+              </>
+            )}
+          </details>
+        </div>
+      )}
+
+      {/* Notifications */}
+      {metrics?.notifications && metrics.notifications.total_received > 0 && (
+        <div className="metrics-section">
+          <details open className="section-details">
+            <summary className="section-summary">
+              <h3>🔔 NPL Notifications</h3>
+              <span className="section-subtitle">
+                {metrics.notifications.total_received} received · 
+                {metrics.notifications.total_processed} processed · 
+                {metrics.notifications.avg_processing_time_ms && ` Avg ${formatDuration(metrics.notifications.avg_processing_time_ms)} · `}
+                Success {formatNumber((metrics.notifications.success_rate || 0) * 100, 1)}%
+              </span>
+            </summary>
+            {metrics.notifications.by_agent && Object.keys(metrics.notifications.by_agent).length > 0 && (
+              <>
+                <h4 className="subsection-title">By Agent</h4>
+                <div className="breakdown-grid">
+                  {Object.entries(metrics.notifications.by_agent).map(([agent, count]) => (
+                    <div key={agent} className="breakdown-item">
+                      <span className="breakdown-label">{agent}</span>
+                      <span className="breakdown-value">{count}</span>
+                    </div>
+                  ))}
+                </div>
+              </>
+            )}
+            {metrics.notifications.by_type && Object.keys(metrics.notifications.by_type).length > 0 && (
+              <>
+                <h4 className="subsection-title">By Type</h4>
+                <div className="breakdown-grid">
+                  {Object.entries(metrics.notifications.by_type).map(([type, count]) => (
+                    <div key={type} className="breakdown-item">
+                      <span className="breakdown-label">{type}</span>
+                      <span className="breakdown-value">{count}</span>
+                    </div>
+                  ))}
+                </div>
+              </>
+            )}
+          </details>
+        </div>
+      )}
+
+      {/* A2A Messages */}
+      {metrics?.a2a_messages && (metrics.a2a_messages.total_sent > 0 || metrics?.a2a_transfers?.by_agent) && (
+        <div className="metrics-section">
+          <details open className="section-details">
+            <summary className="section-summary">
+              <h3>⇄ A2A Messages</h3>
+              {metrics.a2a_messages.total_sent > 0 && (
+                <span className="section-subtitle">
+                  {metrics.a2a_messages.total_sent} sent · 
+                  {metrics.a2a_messages.total_received} received · 
+                  {metrics.a2a_messages.total_errors > 0 && ` ${metrics.a2a_messages.total_errors} errors · `}
+                  {metrics.a2a_messages.avg_roundtrip_ms && ` Avg ${formatDuration(metrics.a2a_messages.avg_roundtrip_ms)} · `}
+                  Success {formatNumber((metrics.a2a_messages.success_rate || 0) * 100, 1)}%
+                </span>
+              )}
+            </summary>
+            {metrics.a2a_messages.by_route && Object.keys(metrics.a2a_messages.by_route).length > 0 && (
+              <>
+                <h4 className="subsection-title">By Route</h4>
+                <div className="breakdown-grid">
+                  {Object.entries(metrics.a2a_messages.by_route).map(([route, count]) => (
+                    <div key={route} className="breakdown-item">
+                      <span className="breakdown-label">{route}</span>
+                      <span className="breakdown-value">{count}</span>
+                    </div>
+                  ))}
+                </div>
+              </>
+            )}
+            {/* Fallback to old a2a_transfers if new metrics not available */}
+            {(!metrics.a2a_messages.by_route || Object.keys(metrics.a2a_messages.by_route).length === 0) 
+             && metrics?.a2a_transfers?.by_agent && Object.keys(metrics.a2a_transfers.by_agent).length > 0 && (
+              <>
+                <h4 className="subsection-title">By Agent</h4>
+                <div className="breakdown-grid">
+                  {Object.entries(metrics.a2a_transfers.by_agent).map(([agent, count]) => (
+                    <div key={agent} className="breakdown-item">
+                      <span className="breakdown-label">{agent}</span>
+                      <span className="breakdown-value">{count}</span>
+                    </div>
+                  ))}
+                </div>
+              </>
+            )}
           </details>
         </div>
       )}

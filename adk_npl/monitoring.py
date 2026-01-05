@@ -1,19 +1,192 @@
 """
 Monitoring and observability utilities for ADK-NPL integration.
 
-Provides structured logging, metrics collection, and health checks.
+Provides structured logging, metrics collection, health checks,
+and OpenTelemetry integration for ADK telemetry.
 """
 
 import json
 import time
 import logging
+import os
 import requests
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional, List, Callable
 from datetime import datetime, timezone
 from collections import defaultdict
 from threading import Lock
+from functools import wraps
 
 logger = logging.getLogger(__name__)
+
+
+# =============================================================================
+# ADK TELEMETRY CONFIGURATION
+# =============================================================================
+
+def configure_adk_telemetry(
+    service_name: str = "adk-npl-demo",
+    enable_console_export: bool = True,
+    capture_content: bool = False
+):
+    """
+    Configure OpenTelemetry for ADK telemetry.
+    
+    This enables tracing of LLM calls, tool calls, and agent invocations
+    from the ADK framework.
+    
+    Args:
+        service_name: Name of the service for tracing
+        enable_console_export: If True, export traces to console (for debugging)
+        capture_content: If True, capture message content in spans (privacy consideration)
+    
+    Returns:
+        The configured TracerProvider, or None if OpenTelemetry is not available
+    """
+    try:
+        from opentelemetry import trace
+        from opentelemetry.sdk.trace import TracerProvider
+        from opentelemetry.sdk.resources import Resource
+        
+        # Set environment variable to control content capture in ADK spans
+        if capture_content:
+            os.environ["ADK_CAPTURE_MESSAGE_CONTENT_IN_SPANS"] = "true"
+        
+        # Create resource with service name
+        resource = Resource.create({"service.name": service_name})
+        
+        # Create and set tracer provider
+        provider = TracerProvider(resource=resource)
+        trace.set_tracer_provider(provider)
+        
+        if enable_console_export:
+            try:
+                from opentelemetry.sdk.trace.export import ConsoleSpanExporter, BatchSpanProcessor
+                processor = BatchSpanProcessor(ConsoleSpanExporter())
+                provider.add_span_processor(processor)
+                logger.info(f"✅ ADK telemetry configured with console export (service: {service_name})")
+            except ImportError:
+                logger.warning("Console exporter not available, telemetry enabled without export")
+        
+        return provider
+        
+    except ImportError:
+        logger.warning("OpenTelemetry not installed. ADK telemetry disabled. "
+                      "Install with: pip install opentelemetry-api opentelemetry-sdk")
+        return None
+
+
+# =============================================================================
+# INSTRUMENTATION DECORATORS
+# =============================================================================
+
+def instrument_function(
+    metric_name: str,
+    log_entry: bool = True,
+    log_exit: bool = True,
+    log_errors: bool = True
+) -> Callable:
+    """
+    Decorator to instrument a function with metrics and logging.
+    
+    Records:
+    - Call count
+    - Latency
+    - Errors
+    
+    Args:
+        metric_name: Base name for metrics (e.g., "notification.dispatch")
+        log_entry: Log function entry
+        log_exit: Log function exit with result
+        log_errors: Log errors
+    
+    Example:
+        @instrument_function("npl.tool_call")
+        def my_tool_call(arg1, arg2):
+            ...
+    """
+    def decorator(func: Callable) -> Callable:
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            metrics = get_metrics()
+            start_time = time.time()
+            
+            # Log entry
+            if log_entry:
+                logger.debug(f"[INSTRUMENT] {metric_name} - ENTRY", 
+                           extra={"args_count": len(args), "kwargs_keys": list(kwargs.keys())})
+            
+            try:
+                result = func(*args, **kwargs)
+                
+                # Record success metrics
+                latency = time.time() - start_time
+                metrics.increment(f"{metric_name}.calls", status="success")
+                metrics.record_latency(f"{metric_name}.latency", latency)
+                
+                # Log exit
+                if log_exit:
+                    logger.debug(f"[INSTRUMENT] {metric_name} - SUCCESS ({latency*1000:.1f}ms)")
+                
+                return result
+                
+            except Exception as e:
+                # Record error metrics
+                latency = time.time() - start_time
+                metrics.increment(f"{metric_name}.calls", status="error")
+                metrics.record_latency(f"{metric_name}.latency", latency)
+                metrics.record_error(type(e).__name__, str(e), metric=metric_name)
+                
+                # Log error
+                if log_errors:
+                    logger.error(f"[INSTRUMENT] {metric_name} - ERROR: {e}")
+                
+                raise
+                
+        return wrapper
+    return decorator
+
+
+async def instrument_async_function(
+    metric_name: str,
+    log_entry: bool = True,
+    log_exit: bool = True,
+    log_errors: bool = True
+) -> Callable:
+    """Async version of instrument_function decorator."""
+    def decorator(func: Callable) -> Callable:
+        @wraps(func)
+        async def wrapper(*args, **kwargs):
+            metrics = get_metrics()
+            start_time = time.time()
+            
+            if log_entry:
+                logger.debug(f"[INSTRUMENT] {metric_name} - ENTRY")
+            
+            try:
+                result = await func(*args, **kwargs)
+                
+                latency = time.time() - start_time
+                metrics.increment(f"{metric_name}.calls", status="success")
+                metrics.record_latency(f"{metric_name}.latency", latency)
+                
+                if log_exit:
+                    logger.debug(f"[INSTRUMENT] {metric_name} - SUCCESS ({latency*1000:.1f}ms)")
+                
+                return result
+                
+            except Exception as e:
+                latency = time.time() - start_time
+                metrics.increment(f"{metric_name}.calls", status="error")
+                metrics.record_latency(f"{metric_name}.latency", latency)
+                metrics.record_error(type(e).__name__, str(e), metric=metric_name)
+                
+                if log_errors:
+                    logger.error(f"[INSTRUMENT] {metric_name} - ERROR: {e}")
+                
+                raise
+                
+        return wrapper
+    return decorator
 
 
 class StructuredLogger:

@@ -1,16 +1,32 @@
 """
-Dynamic tool generation from NPL Engine OpenAPI specs.
+Dynamic tool generation from NPL Engine OpenAPI specs (Smart NPL Bridge).
 
-Generates Python functions with explicit typed parameters from OpenAPI schemas,
-making them self-documenting for LLM consumption.
+This module implements the "Smart NPL Bridge" - a semantic layer that enriches
+tools with goal-oriented descriptions, business rules, and workflow guidance.
+
+Key Features:
+- Parses NPL source files to extract workflow, states, and party permissions
+- Infers goal-oriented descriptions from party names (e.g., 'seller' → 'selling')
+- Generates self-documenting tools that guide agents toward correct usage
+- No hardcoded mappings - everything is derived from NPL protocols
+- Supports arbitrary party names and domain-specific protocols
+
+Philosophy:
+- Tools are NOT filtered by agent identity
+- Instead, tools describe their purpose and typical use cases
+- Agents self-select tools based on their objectives
+- NPL enforces party bindings at runtime
 """
 
 import logging
 import inspect
+import re
+from pathlib import Path
 from typing import List, Dict, Any, Optional, Callable, get_type_hints
 from google.adk.tools import FunctionTool
 
 from .client import NPLClient
+from .config import NPLConfig
 from .discovery import NPLPackageDiscovery
 from .protocol_memory import NPLProtocolMemory, create_memory_tools, auto_track_result
 from .utils import (
@@ -22,6 +38,15 @@ from .utils import (
 )
 
 logger = logging.getLogger(__name__)
+
+# Try to import diagram generator (optional - may not have NPL source files)
+try:
+    from .diagram_generator import generate_workflow_summary_for_protocol, NPLProtocolParser
+    from .standards_registry import get_semantic_context
+    HAS_SEMANTIC_BRIDGE = True
+except ImportError:
+    HAS_SEMANTIC_BRIDGE = False
+    logger.warning("Semantic bridge components not available - summaries will be limited")
 
 
 def create_typed_function(
@@ -94,6 +119,61 @@ def {func_name}({param_str}) -> dict:
     exec(code, local_ns)
     
     return local_ns[func_name]
+
+
+def create_identity_tool(config: NPLConfig) -> FunctionTool:
+    """Create a tool that returns the agent's own identity and party claims."""
+    username = config.credentials.get("username", "unknown")
+    
+    # Extract org/dept from username pattern (e.g., purchasing_agent@acme-corp.com)
+    email = username
+    org = "Unknown"
+    dept = "Unknown"
+    
+    if "@" in username:
+        if "acme-corp" in username:
+            org = "Acme Corp"
+            dept = "Procurement" if "purchasing" in username else "Unknown"
+        elif "supplier-inc" in username:
+            org = "Supplier Inc"
+            dept = "Sales" if "supplier" in username else "Unknown"
+    elif "purchasing" in username:
+        org = "Acme Corp"
+        dept = "Procurement"
+    elif "supplier" in username:
+        org = "Supplier Inc"
+        dept = "Sales"
+    
+    def get_my_identity() -> str:
+        """
+        Get your own identity and party claims for use in protocol bindings.
+        
+        CRITICAL: Call this BEFORE creating any multi-party protocol (Offer, PurchaseOrder).
+        
+        Returns:
+            Your identity information with EXACT claim values to use in A2A messages
+            and NPL protocol party bindings.
+        """
+        return f"""=== YOUR IDENTITY (use EXACTLY these values) ===
+
+Organization: {org}
+Department: {dept}
+
+=== FOR A2A MESSAGES ===
+When another agent asks for your identity, reply with:
+"My identity: organization={org}, department={dept}"
+
+=== FOR NPL PROTOCOL CREATION ===
+When creating a multi-party protocol where YOU are a party, use:
+{{"organization": "{org}", "department": "{dept}"}}
+
+=== IMPORTANT ===
+- These are YOUR claims from your JWT token
+- The other party MUST provide THEIR claims via A2A before you can bind them
+- NEVER invent or guess claims for other parties
+"""
+    
+    return FunctionTool(get_my_identity)
 
 
 class NPLToolGenerator:
@@ -201,7 +281,204 @@ class NPLToolGenerator:
         
         # Protocol memory for tracking instances across turns
         self.protocol_memory = protocol_memory or NPLProtocolMemory.get_instance(agent_id)
+        
+        # Try to find NPL source directory (for workflow diagram generation)
+        self.npl_source_dir = self._find_npl_source_dir()
     
+    def _find_npl_source_dir(self) -> Optional[Path]:
+        """Try to find the NPL source directory relative to this package."""
+        try:
+            # Look for npl/src/main/npl-* directories
+            current_file = Path(__file__)
+            # adk_npl/tools.py -> adk_npl/ -> project root
+            project_root = current_file.parent.parent
+            npl_dir = project_root / "npl" / "src" / "main"
+            if npl_dir.exists():
+                return npl_dir
+        except Exception:
+            pass
+        return None
+    
+    def _get_protocol_metadata(self, package: str, protocol_name: str) -> Optional[Dict]:
+        """Get parsed metadata for a protocol if NPL source files are available."""
+        if not self.npl_source_dir:
+            return None
+        
+        try:
+            # Try to match the protocol name to a filename in the package directory
+            # Common mappings: PurchaseOrder -> purchase_order.npl, Offer -> offer.npl
+            for npl_version_dir in self.npl_source_dir.glob("npl-*"):
+                package_dir = npl_version_dir / package
+                if not package_dir.exists():
+                    continue
+                
+                # Look for files that might match
+                possible_names = [
+                    f"{protocol_name.lower()}.npl",
+                    f"{''.join(['_' + c.lower() if c.isupper() else c for c in protocol_name]).lstrip('_')}.npl"
+                ]
+                
+                for name in possible_names:
+                    npl_file = package_dir / name
+                    if npl_file.exists():
+                        parser = NPLProtocolParser(npl_file)
+                        return parser.parse()
+        except Exception as e:
+            logger.debug(f"Could not parse protocol metadata for {package}.{protocol_name}: {e}")
+        
+        return None
+    
+    def _get_dependent_protocols(self, package: str, protocol_name: str) -> List[Dict[str, str]]:
+        """
+        Find protocols in the same package that reference/import this protocol.
+        
+        Used for cross-protocol workflow guidance - when a protocol reaches a final
+        state, this tells us what protocol(s) should be created next.
+        
+        Returns:
+            List of dicts with 'protocol', 'reference_param', and 'suggestion'
+        """
+        if not self.npl_source_dir or not HAS_SEMANTIC_BRIDGE:
+            return []
+        
+        dependents = []
+        try:
+            for npl_version_dir in self.npl_source_dir.glob("npl-*"):
+                package_dir = npl_version_dir / package
+                if not package_dir.exists():
+                    continue
+                
+                for npl_file in package_dir.glob("*.npl"):
+                    try:
+                        parser = NPLProtocolParser(npl_file)
+                        info = parser.parse()
+                        other_protocol = info.get("protocol_name")
+                        
+                        # Skip self
+                        if other_protocol == protocol_name:
+                            continue
+                        
+                        # Check if this protocol references our protocol
+                        # Look for: use commerce.Offer; or parameter type like acceptedOffer: Offer
+                        content = npl_file.read_text()
+                        
+                        # Check imports
+                        if f"use {package}.{protocol_name};" in content:
+                            # Find parameter that uses this type
+                            param_match = re.search(rf'(\w+)\s*:\s*{protocol_name}', content)
+                            param_name = param_match.group(1) if param_match else protocol_name.lower()
+                            
+                            dependents.append({
+                                "protocol": other_protocol,
+                                "reference_param": param_name,
+                                "suggestion": f"Create a {other_protocol} using npl_{package}_{other_protocol}_create() with this {protocol_name} as '{param_name}'"
+                            })
+                    except Exception as e:
+                        logger.debug(f"Could not check {npl_file} for dependencies: {e}")
+        except Exception as e:
+            logger.debug(f"Could not scan for dependent protocols: {e}")
+        
+        return dependents
+    
+    def _get_workflow_summary(self, package: str, protocol_name: str) -> Optional[str]:
+        """Get workflow summary for a protocol if NPL source files are available."""
+        if not self.npl_source_dir or not HAS_SEMANTIC_BRIDGE:
+            return None
+        
+        try:
+            # Try to match the protocol name to a filename in the package directory
+            # Common mappings: PurchaseOrder -> purchase_order.npl, Offer -> offer.npl
+            for npl_version_dir in self.npl_source_dir.glob("npl-*"):
+                package_dir = npl_version_dir / package
+                if not package_dir.exists():
+                    continue
+                
+                # Look for files that might match
+                possible_names = [
+                    f"{protocol_name.lower()}.npl",
+                    f"{''.join(['_' + c.lower() if c.isupper() else c for c in protocol_name]).lstrip('_')}.npl"
+                ]
+                
+                for name in possible_names:
+                    npl_file = package_dir / name
+                    if npl_file.exists():
+                        return generate_workflow_summary_for_protocol(npl_file)
+        except Exception as e:
+            logger.debug(f"Could not generate workflow summary for {package}.{protocol_name}: {e}")
+        
+        return None
+
+    def _generate_role_guidance(
+        self, 
+        protocol_name: str, 
+        action_name: str, 
+        parties: List[str],
+        source_states: Optional[List[str]] = None,
+        target_states: Optional[List[str]] = None,
+        metadata: Optional[Dict[str, Any]] = None
+    ) -> str:
+        """
+        Generate party role guidance for objective-based matching.
+        
+        Focus: Present party role clearly and let the LLM match objective to role.
+        No hardcoded semantic dictionaries - trust LLM's language understanding.
+        """
+        sections = []
+        
+        # Party Role Section - Clear and simple
+        if len(parties) == 1:
+            party = parties[0]
+            sections.append(f"### 🎯 PARTY ROLE: **{party}**")
+            
+            # Add Schema.org reference if available from metadata imports
+            schema_org_url = self._get_schema_org_url(party, metadata)
+            if schema_org_url:
+                sections.append(f"Schema.org: {schema_org_url}")
+            
+            sections.append(f"\nThis action is performed by the party in the **{party}** role.")
+            sections.append(f"\n**Before using this tool, ask yourself:** Does my objective align with the {party} role?")
+        else:
+            party_list = ', '.join(parties)
+            sections.append(f"### 🎯 PARTY ROLES: **{party_list}**")
+            sections.append(f"\nThis action can be performed by any party in these roles: **{party_list}**.")
+            sections.append(f"\n**Before using this tool, ask yourself:** Does my objective align with any of these roles?")
+        
+        # Workflow Context - State requirements and transitions
+        if source_states or target_states:
+            sections.append("\n### 📋 WORKFLOW CONTEXT")
+            if source_states:
+                sections.append(f"**Valid from states:** `{', '.join(source_states)}`")
+            if target_states:
+                sections.append(f"**Transitions to:** `{', '.join(target_states)}`")
+        
+        return "\n".join(sections) + "\n"
+    
+    def _get_schema_org_url(self, party_name: str, metadata: Optional[Dict[str, Any]] = None) -> Optional[str]:
+        """
+        Extract Schema.org URL for a party role from metadata imports.
+        
+        When NPL adds JSON-LD support, this will come directly from the OpenAPI spec.
+        For now, we check the imports for schema.org references.
+        """
+        if not metadata:
+            return None
+        
+        # Check imports for schema.org references
+        for imp in metadata.get('imports', []):
+            if 'schema.org' in imp.lower():
+                # Try to match party name in the import
+                # e.g., "use @schema.org/seller" or "from schema.org import seller"
+                if party_name.lower() in imp.lower():
+                    # Return standard schema.org URL
+                    return f"http://schema.org/{party_name.capitalize()}"
+        
+        # Fallback: if schema.org is imported, assume standard naming
+        for imp in metadata.get('imports', []):
+            if 'schema.org' in imp.lower():
+                return f"http://schema.org/{party_name.capitalize()}"
+        
+        return None
+
     async def generate_tools(
         self,
         packages: Optional[List[str]] = None,
@@ -325,13 +602,18 @@ class NPLToolGenerator:
         
         # Generate query tools for protocols that have create/action tools
         for protocol_name in protocols_with_tools:
-            # Add get instance tool
+            # Add get instance tool (for fetching specific instances by UUID)
             get_func = self._create_get_instance_function(package, protocol_name)
             tools.append(FunctionTool(get_func, require_confirmation=False))
             
-            # Add list instances tool
-            list_func = self._create_list_instances_function(package, protocol_name)
-            tools.append(FunctionTool(list_func, require_confirmation=False))
+            # Add next_actions tool (NPL-assisted state awareness)
+            # This is the key tool for the "orient → decide → act → stop" pattern
+            next_actions_func = self._create_next_actions_function(package, protocol_name)
+            tools.append(FunctionTool(next_actions_func, require_confirmation=False))
+            
+            # TODO: Add GraphQL-based list tool for querying protocols by party
+            # NPL has a GraphQL read model with JWT/claims authorization
+            # For now, agents exchange protocol UUIDs via A2A messages
         
         return tools
     
@@ -397,12 +679,17 @@ class NPLToolGenerator:
                     })
                 else:
                     # Simple referenced type (like Product_Reference)
+                    # Extract the referenced type name from the $ref
+                    ref_name = prop_def["$ref"].split("/")[-1]  # e.g., "Product_Reference"
+                    referenced_protocol = ref_name.replace("_Reference", "")  # e.g., "Product"
+                    
                     params.append({
                         "name": full_name,
-                        "type": "str",  # References are IDs
+                        "type": "str",  # References are UUIDs
                         "required": prop_name in required and not is_nullable,
                         "nullable": is_nullable,
-                        "description": f"Reference ID"
+                        "description": f"UUID of an existing {referenced_protocol} protocol instance. You MUST create the {referenced_protocol} first using the `npl_*_{referenced_protocol}_create` tool, then use its @id (UUID) here. Do NOT use SKU, name, or any other identifier - only the UUID from the @id field.",
+                        "format": "uuid"
                     })
             else:
                 # Direct property
@@ -671,15 +958,255 @@ class NPLToolGenerator:
         
         # Build parameter documentation
         param_docs = []
+        reference_fields = []  # Track fields that reference other protocols
         for p in all_params:
             req = "(required)" if p['required'] else "(optional)"
             desc = self._build_param_description(p)
             param_docs.append(f"{p['name']}: {p['type']} {req} - {desc}")
+            
+            # Check if this is a reference field (has format uuid and description mentions UUID)
+            if p.get('format') == 'uuid' and 'UUID' in desc and 'protocol instance' in desc:
+                # Extract the referenced protocol name from description
+                # e.g., "UUID of an existing Product protocol instance"
+                import re
+                match = re.search(r'existing (\w+) protocol', desc)
+                if match:
+                    reference_fields.append({
+                        'field': p['name'],
+                        'protocol': match.group(1)
+                    })
         
         func_name = f"npl_{package}_{protocol_name}_create"
         
-        doc = f"""{summary}
+        # Add guidance about party actions for multi-party protocols
+        binding_warning = ""
+        if len(parties) > 1:
+            party_names = [p['name'] for p in parties]
+            
+            # Get metadata to understand which party can do what
+            metadata = self._get_protocol_metadata(package, protocol_name)
+            party_actions = {}
+            if metadata:
+                for perm in metadata.get('permissions', []):
+                    for party in perm.get('parties', []):
+                        if party not in party_actions:
+                            party_actions[party] = []
+                        party_actions[party].append(perm['action'])
+            
+            # Build action guidance for each party
+            action_guidance = []
+            for party in party_names:
+                actions = party_actions.get(party, [])
+                if actions:
+                    action_guidance.append(f"- **{party}** can: {', '.join(actions)}")
+                else:
+                    action_guidance.append(f"- **{party}**: no specific actions found")
+            
+            # Determine which party typically creates this protocol
+            # Key insight: The party who performs FIRST actions (from initial state) should create it
+            # Even though all parties are bound to the protocol, only one initiates the workflow
+            
+            creator_party = None
+            initial_state = None
+            
+            # Try to extract initial state from metadata (only if available)
+            try:
+                if metadata and isinstance(metadata, dict):
+                    states = metadata.get('states', [])
+                    if states and isinstance(states, list):
+                        for state in states:
+                            if isinstance(state, dict) and state.get('initial', False):
+                                initial_state = state.get('name')
+                                break
+                
+                # Find which party has actions FROM the initial state
+                if initial_state and metadata and isinstance(metadata, dict):
+                    permissions = metadata.get('permissions', [])
+                    if permissions and isinstance(permissions, list):
+                        for perm in permissions:
+                            if not isinstance(perm, dict):
+                                continue
+                            # Check if this permission is valid from the initial state
+                            perm_states = perm.get('states', [])
+                            if not perm_states or initial_state in perm_states:
+                                # This action can be performed from initial state
+                                perm_parties = perm.get('parties', [])
+                                if perm_parties and isinstance(perm_parties, list) and len(perm_parties) > 0:
+                                    # Use the first party who can act from initial state
+                                    creator_party = perm_parties[0]
+                                    break
+            except Exception as e:
+                logger.debug(f"Could not extract initial state info for {protocol_name}: {e}")
+            
+            # Fallback: if no initial state logic, use party with most actions
+            if not creator_party and party_actions:
+                max_actions = 0
+                for party in party_names:
+                    actions = party_actions.get(party, [])
+                    action_count = len(actions) if actions else 0
+                    if action_count > max_actions:
+                        max_actions = action_count
+                        creator_party = party
+            
+            # Build WHO creates guidance with clear principle
+            initial_state_note = f" (starts in '{initial_state}' state)" if initial_state else ""
+            
+            who_creates = f"""
+### 🎯 WHO CREATES THIS PROTOCOL?
 
+**Typically created by: {creator_party or 'any party'}**{initial_state_note}
+
+This is a multi-party protocol involving: **{', '.join(party_names)}**
+
+**CRITICAL PRINCIPLE:**
+Even though ALL parties are bound to this protocol, **only ONE party should instantiate it**:
+→ The party who needs to take the FIRST actions in the workflow sequence
+
+**What can each party DO after creation?**
+{chr(10).join(action_guidance)}
+
+**⚠️ BEFORE CREATING, ASK YOURSELF:**
+1. **Am I at the START of this protocol's workflow?**
+   - If YES (you need to take first actions{f' from {initial_state} state' if initial_state else ''}) → YOU create it
+   - If NO (you respond to someone else's actions) → WAIT for them to create and share UUID
+
+2. **Do I need this protocol to EXIST to achieve my next goal?**
+   - If YES → You're probably the initiator, create it
+   - If NO → You're probably the responder, wait for it
+
+**Example:**
+- **{creator_party}** creates this protocol and takes initial actions
+- Other parties WAIT for {creator_party} to send them the UUID via A2A
+- Then they use npl_{package}_{protocol_name}_get(instance_id) to access and respond
+- They perform THEIR actions on the EXISTING protocol instance
+
+**Wrong:** Both parties trying to create their own instances → leads to confusion and duplicates
+**Right:** One party creates, shares UUID, other parties respond to that instance
+"""
+            
+            binding_warning = f"""{who_creates}
+
+**⛔ MANDATORY: A2A IDENTITY EXCHANGE BEFORE CREATION**
+You CANNOT use placeholder or invented claims like "PurchasingOrg" or "BuyerDept".
+YOU MUST:
+1. Call `get_my_identity` to get YOUR claims (organization, department)
+2. Send an A2A message asking the other party: "What is your organization and department?"
+3. WAIT for their reply with their EXACT claims
+4. Use ONLY the claims they provided when creating this protocol
+
+**Example A2A exchange:**
+- You send: "I want to offer you a product. My identity: organization=Supplier Inc, department=Sales. What is YOUR organization and department?"
+- They reply: "My identity: organization=Acme Corp, department=Procurement"
+- NOW you can create the protocol using EXACTLY: seller={{organization=Supplier Inc, department=Sales}}, buyer={{organization=Acme Corp, department=Procurement}}
+
+**If you don't have the other party's real claims, STOP and ask via A2A first.**
+"""
+        
+        # Add Reference Workflow Warning if there are reference fields
+        reference_warning = ""
+        if reference_fields:
+            ref_list = []
+            for ref in reference_fields:
+                ref_list.append(f"- **{ref['field']}**: Must be the UUID (@id) of an existing {ref['protocol']} instance. Create the {ref['protocol']} first using `npl_{package}_{ref['protocol']}_create`, then use its @id here.")
+            
+            # Build explicit sequence warning
+            protocol_chain = " → ".join([ref['protocol'] for ref in reference_fields] + [protocol_name])
+            
+            reference_warning = f"""
+### 🚨 CRITICAL: PROTOCOL DEPENDENCY SEQUENCE
+This {protocol_name} CANNOT be created until prerequisites exist!
+
+**REQUIRED SEQUENCE:**
+{protocol_chain}
+
+**Reference Fields:**
+{chr(10).join(ref_list)}
+
+**WRONG APPROACH:**
+❌ Creating {protocol_name} first → NPL will REJECT (missing required fields)
+❌ Using product name, SKU, or human-readable ID → NPL will REJECT
+
+**CORRECT APPROACH:**
+✅ 1. Check recall_my_protocols() to see if you already have the required protocols
+✅ 2. If missing, create the prerequisite protocol(s) FIRST
+✅ 3. Get the @id (UUID) from the creation result
+✅ 4. Then create THIS protocol using that UUID in the {reference_fields[0]['field']} parameter
+
+**Example:**
+  result = npl_{package}_{reference_fields[0]['protocol']}_create(...)
+  prerequisite_uuid = result['@id']  # e.g., "abc-123-def-456"
+  npl_{package}_{protocol_name}_create({reference_fields[0]['field']}=prerequisite_uuid, ...)
+
+If you try to skip this sequence, NPL will block you with a validation error.
+"""
+
+        # Get rich metadata if available
+        metadata = self._get_protocol_metadata(package, protocol_name)
+        semantic_info = ""
+        workflow_summary = self._get_workflow_summary(package, protocol_name)
+        
+        if workflow_summary:
+            semantic_info += f"### Workflow Summary\n{workflow_summary}\n\n"
+        
+        # Add party role guidance for protocol creation
+        role_guidance = ""
+        if parties:
+            party_names = [p['name'] for p in parties]
+            initiator = party_names[0]
+            other_parties = party_names[1:]
+            
+            # Get Schema.org URL for initiator
+            schema_org_url = self._get_schema_org_url(initiator, metadata)
+            schema_line = f"\nSchema.org: {schema_org_url}" if schema_org_url else ""
+            
+            if len(party_names) == 1:
+                role_guidance = f"""
+### 🎯 PARTY ROLE: **{initiator}** (Creator){schema_line}
+
+This protocol is created by the party in the **{initiator}** role.
+
+**Before creating, ask yourself:** Does my objective align with the {initiator} role?
+"""
+            else:
+                other_list = ', '.join(other_parties)
+                role_guidance = f"""
+### 🎯 PARTY ROLE: **{initiator}** (Typical Creator){schema_line}
+
+This protocol is typically created by the **{initiator}**. 
+Other parties involved: **{other_list}**
+
+**Before creating, ask yourself:** 
+- Does my objective align with the {initiator} role?
+- If you are playing the role of {other_list}, you should typically WAIT for the {initiator} to create this, then use your party-specific actions.
+"""
+        
+        if metadata:
+            semantic_info += f"### Business Rules (Policy)\n"
+            for req in metadata.get('global_requirements', []):
+                semantic_info += f"- Rule: {req}\n"
+            
+            # Add Standards context (ISO, Schema.org, etc.)
+            standards_context = []
+            for imp in metadata.get('imports', []):
+                standards_context.append(get_semantic_context(imp))
+            
+            if standards_context:
+                semantic_info += f"\n### Industry Standards\n"
+                semantic_info += "\n".join(standards_context) + "\n"
+
+        doc = f"""╔══════════════════════════════════════════════════════════════════╗
+║ ⚠️  READ ALL PARAMETER DESCRIPTIONS BEFORE CALLING THIS TOOL  ⚠️  ║
+╚══════════════════════════════════════════════════════════════════╝
+
+{summary}
+
+{binding_warning}
+
+{reference_warning}
+
+{role_guidance}
+
+{semantic_info}
 Creates a new {protocol_name} protocol instance in the {package} package.
 
 Args:
@@ -759,6 +1286,14 @@ Error Handling:
                     parties=parties_dict,
                     data=data
                 )
+                
+                # #region agent log
+                import json as _json_create, time as _time_create
+                protocol_id = result.get("@id", "unknown") if isinstance(result, dict) else "unknown"
+                with open("/Users/juerg/development/adk-demo/.cursor/debug.log", "a") as _f:
+                    _f.write(_json_create.dumps({"location": "tools.py:create_result", "message": "Protocol created - UUID returned", "data": {"protocol": protocol_name, "uuid": protocol_id, "parties": list(parties_dict.keys())}, "hypothesisId": "H9", "timestamp": _time_create.time()}) + "\n")
+                # #endregion
+                
                 # Add success indicator for clarity
                 if isinstance(result, dict) and "@id" in result:
                     result["success"] = True
@@ -817,8 +1352,51 @@ Error Handling:
         
         func_name = f"npl_{package}_{protocol_name}_{action_name}"
         
-        doc = f"""{summary}
+        # Get workflow summary
+        workflow_summary = self._get_workflow_summary(package, protocol_name)
+        workflow_section = ""
+        if workflow_summary:
+            workflow_section = f"\n### Workflow Summary\n{workflow_summary}\n"
+        
+        # Get rich metadata if available
+        metadata = self._get_protocol_metadata(package, protocol_name)
+        action_rules = ""
+        role_guidance = ""
+        if metadata:
+            logger.debug(f"Found metadata for {protocol_name}, checking {action_name}")
+            # Find rules specific to this action
+            for perm in metadata.get('permissions', []):
+                if perm['action'] == action_name:
+                    logger.debug(f"Matched permission for {action_name}")
+                    
+                    # Add comprehensive role/objective guidance with all three semantic layers
+                    parties = perm.get('parties', [])
+                    source_states = perm.get('source_states', [])
+                    target_states = perm.get('target_states', [])
+                    
+                    if parties:
+                        role_guidance = self._generate_role_guidance(
+                            protocol_name, 
+                            action_name, 
+                            parties,
+                            source_states=source_states,
+                            target_states=target_states,
+                            metadata=metadata
+                        )
+                    
+                    if perm.get('requirements'):
+                        action_rules += "\n### ⚠️ Business Rules\n"
+                        for req in perm['requirements']:
+                            action_rules += f"- {req}\n"
 
+        doc = f"""╔══════════════════════════════════════════════════════════════════╗
+║ ⚠️  READ ALL PARAMETER DESCRIPTIONS BEFORE CALLING THIS TOOL  ⚠️  ║
+╚══════════════════════════════════════════════════════════════════╝
+
+{summary}
+{workflow_section}
+{role_guidance}
+{action_rules}
 Executes the {action_name} action on a {protocol_name} protocol instance.
 
 IMPORTANT: This action may only be valid in certain protocol states. If you receive a state_error,
@@ -855,6 +1433,18 @@ Error Handling:
                     party=party,
                     params=kwargs
                 )
+                
+                # #region agent log
+                import json as _json_action, time as _time_action
+                new_state = None
+                if result is None:
+                    new_state = "void_result"
+                elif isinstance(result, dict):
+                    new_state = result.get("@state") or result.get("state") or "unknown"
+                with open("/Users/juerg/development/adk-demo/.cursor/debug.log", "a") as _f:
+                    _f.write(_json_action.dumps({"location": "tools.py:action_executed", "message": "NPL action executed", "data": {"protocol": protocol_name, "action": action_name, "instance_id": instance_id, "party": party, "new_state": new_state}, "hypothesisId": "H12", "timestamp": _time_action.time()}) + "\n")
+                # #endregion
+                
                 # Add success indicator for clarity
                 if result is None:
                     # Update state in memory for void actions (state transitions)
@@ -927,6 +1517,250 @@ Usage Pattern:
                 return result
             except Exception as e:
                 return NPLToolGenerator._create_structured_error(e, f"{protocol_name}_get")
+        
+        return create_typed_function(func_name, doc, all_params, impl)
+    
+    def _create_next_actions_function(
+        self,
+        package: str,
+        protocol_name: str
+    ) -> Callable:
+        """
+        Create a tool that tells agents what actions are available based on current state.
+        
+        This is the "smart bridge" that combines:
+        1. Current NPL state (from get_instance)
+        2. Metadata about valid transitions (from NPL parser)
+        3. Clear guidance on what to do next
+        """
+        func_name = f"npl_{package}_{protocol_name}_next_actions"
+        metadata = self._get_protocol_metadata(package, protocol_name)
+        
+        doc = f"""Get available actions for a {protocol_name} instance based on its current state.
+
+╔══════════════════════════════════════════════════════════════════╗
+║  ORIENT: Use this tool to understand what you CAN do next!       ║
+╚══════════════════════════════════════════════════════════════════╝
+
+This tool queries NPL (the source of truth) for the protocol's current state,
+then tells you exactly which actions are valid and who can perform them.
+
+Args:
+    instance_id: str (required) - The protocol instance UUID
+    my_party: str (optional) - Your party role (e.g., 'seller', 'buyer') to filter actions
+
+Returns:
+    current_state: The protocol's current state (authoritative from NPL)
+    available_actions: List of actions valid from this state
+    For each action:
+        - action: Action name
+        - parties: Who can execute it
+        - description: What this action does
+        - target_state: Where it transitions to
+        - tool_call: Exact tool call to execute
+
+Usage Pattern (ORIENT → DECIDE → ACT → STOP):
+    1. ORIENT: Call this tool to see what's possible
+    2. DECIDE: Choose ONE action based on your goal
+    3. ACT: Execute the tool_call from the action you chose
+    4. STOP: Wait for the other party to respond
+"""
+        
+        all_params = [
+            {"name": "instance_id", "type": "str", "required": True, "nullable": False},
+            {"name": "my_party", "type": "str", "required": False, "nullable": True}
+        ]
+        
+        # Get permissions from metadata
+        permissions = metadata.get('permissions', []) if metadata else []
+        
+        # Action descriptions for better hints
+        action_descriptions = {
+            # Offer actions
+            "publish": "Make this offer visible to the buyer so they can review it",
+            "accept": "Accept this offer and proceed with the transaction",
+            "reject": "Decline this offer",
+            "counter": "Propose different terms (price, quantity, etc.)",
+            "withdraw": "Cancel this offer",
+            "finalize": "Complete the transaction after acceptance",
+            # Order actions
+            "confirm": "Confirm the order and begin fulfillment",
+            "ship": "Mark the order as shipped",
+            "deliver": "Mark the order as delivered",
+            "cancel": "Cancel this order",
+            "approve": "Approve this order (for orders requiring approval)",
+            # Product actions
+            "activate": "Make this product available for offers",
+            "deactivate": "Remove this product from availability",
+            "update": "Modify product details",
+        }
+        
+        def impl(**kwargs) -> Dict[str, Any]:
+            """Get available actions based on current state."""
+            try:
+                instance_id = kwargs.get("instance_id")
+                my_party = kwargs.get("my_party")
+                
+                
+                # 1. Query NPL for current state (SOURCE OF TRUTH)
+                instance = self.npl_client.get_instance(
+                    package=package,
+                    protocol_name=protocol_name,
+                    instance_id=instance_id
+                )
+                
+                if not isinstance(instance, dict):
+                    return {"success": False, "error": "Could not retrieve instance"}
+                
+                current_state = instance.get("@state", "unknown")
+                
+                # 2. Find actions valid from this state
+                available_actions = []
+                all_parties_for_state = set()
+                
+                for perm in permissions:
+                    source_states = perm.get('source_states', [])
+                    
+                    # Check if action is valid from current state
+                    if current_state in source_states or not source_states:
+                        parties = perm.get('parties', [])
+                        all_parties_for_state.update(parties)
+                        
+                        # Filter by my_party if specified
+                        if my_party and my_party.lower() not in [p.lower() for p in parties]:
+                            continue
+                        
+                        action_name = perm['action']
+                        target = perm.get('target_states', ['unchanged'])[0] if perm.get('target_states') else 'unchanged'
+                        
+                        # Build rich action info with description
+                        action_info = {
+                            "action": action_name,
+                            "parties": parties,
+                            "description": action_descriptions.get(action_name, f"Execute {action_name} action"),
+                            "target_state": target if target != 'unchanged' else current_state,
+                            "tool_call": f"npl_{package}_{protocol_name}_{action_name}(instance_id='{instance_id}', party='{parties[0] if parties else 'unknown'}')"
+                        }
+                        available_actions.append(action_info)
+                
+                # 3. Build helpful response with workflow context
+                if not available_actions:
+                    # Find what OTHER parties can do from this state
+                    other_party_actions = []
+                    for perm in permissions:
+                        source_states = perm.get('source_states', [])
+                        if current_state in source_states or not source_states:
+                            parties = perm.get('parties', [])
+                            action_name = perm['action']
+                            target = perm.get('target_states', ['unchanged'])[0] if perm.get('target_states') else None
+                            
+                            # Only include actions for OTHER parties
+                            if my_party and my_party.lower() not in [p.lower() for p in parties]:
+                                other_party_actions.append({
+                                    "action": action_name,
+                                    "parties": parties,
+                                    "leads_to": target,
+                                    "description": action_descriptions.get(action_name, f"Execute {action_name}")
+                                })
+                    
+                    # Find what actions YOU could take from the NEXT possible states
+                    future_possibilities = []
+                    possible_next_states = set()
+                    for perm in permissions:
+                        source_states = perm.get('source_states', [])
+                        if current_state in source_states:
+                            targets = perm.get('target_states', [])
+                            possible_next_states.update(targets)
+                    
+                    for next_state in possible_next_states:
+                        for perm in permissions:
+                            if next_state in perm.get('source_states', []):
+                                parties = perm.get('parties', [])
+                                if not my_party or my_party.lower() in [p.lower() for p in parties]:
+                                    future_possibilities.append({
+                                        "when_state_is": next_state,
+                                        "you_can": perm['action'],
+                                        "description": action_descriptions.get(perm['action'], "")
+                                    })
+                    
+                    # Build guidance message
+                    waiting_for = []
+                    if other_party_actions:
+                        for action in other_party_actions[:3]:  # Limit to first 3
+                            waiting_for.append(f"{', '.join(action['parties'])} can {action['action']}")
+                    
+                    # Check if this is a final state with dependent protocols
+                    # Also check metadata for actual final state markers
+                    is_final_state = not other_party_actions and not future_possibilities
+                    
+                    # Also check if NPL metadata says this is a final state
+                    if metadata:
+                        states = metadata.get('states', {})
+                        if states.get(current_state) == 'final':
+                            is_final_state = True
+                    
+                    next_protocol_suggestions = []
+                    
+                    if is_final_state:
+                        # Look for protocols that depend on this one
+                        dependents = self._get_dependent_protocols(package, protocol_name)
+                        for dep in dependents:
+                            next_protocol_suggestions.append({
+                                "next_protocol": dep["protocol"],
+                                "how_to_create": f"npl_{package}_{dep['protocol']}_create()",
+                                "use_this_as": dep["reference_param"],
+                                "suggestion": dep["suggestion"]
+                            })
+                    
+                    result = {
+                        "success": True,
+                        "protocol": protocol_name,
+                        "instance_id": instance_id,
+                        "current_state": current_state,
+                        "your_role": my_party or "not specified",
+                        "available_actions": [],
+                        "waiting_for": other_party_actions[:3] if other_party_actions else [],
+                        "your_future_options": future_possibilities[:3] if future_possibilities else [],
+                        "guidance": f"No actions available for you from state '{current_state}'.",
+                        "what_needs_to_happen": waiting_for if waiting_for else ["This may be a final state."],
+                    }
+                    
+                    # Add cross-protocol workflow guidance
+                    if next_protocol_suggestions:
+                        result["workflow_continues_with"] = next_protocol_suggestions
+                        result["suggestion"] = (
+                            f"This {protocol_name} is in final state '{current_state}'. "
+                            f"The workflow continues by creating: {', '.join([s['next_protocol'] for s in next_protocol_suggestions])}. "
+                            f"Use this instance's ID as the '{next_protocol_suggestions[0]['use_this_as']}' parameter."
+                        )
+                    else:
+                        result["suggestion"] = "Wait for the other party to act, or use A2A to communicate with them."
+                    
+                    return result
+                
+                # Build guidance based on available actions
+                action_choices = []
+                for a in available_actions:
+                    choice = f"• {a['action']}: {a['description']}"
+                    if a['target_state'] != current_state:
+                        choice += f" → moves to '{a['target_state']}'"
+                    action_choices.append(choice)
+                
+                result = {
+                    "success": True,
+                    "protocol": protocol_name,
+                    "instance_id": instance_id,
+                    "current_state": current_state,
+                    "your_role": my_party or "not specified",
+                    "available_actions": available_actions,
+                    "guidance": f"You have {len(available_actions)} option(s) from state '{current_state}':",
+                    "your_choices": action_choices,
+                    "next_step": "DECIDE which action aligns with your goal, then ACT by calling the tool_call."
+                }
+                return result
+                
+            except Exception as e:
+                return NPLToolGenerator._create_structured_error(e, f"{protocol_name}_next_actions")
         
         return create_typed_function(func_name, doc, all_params, impl)
     

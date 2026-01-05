@@ -1,0 +1,32 @@
+{
+  "products": [
+    {
+      "sku": "WIDGET-001",
+      "name": "Premium Widget",
+      "description": "High-quality widget for industrial applications",
+      "quantity_available": 500,
+      "unit_price": 1250.00,
+      "lead_time_days": 14,
+      "category": "Widgets"
+    },
+    {
+      "sku": "GADGET-002",
+      "name": "Smart Gadget",
+      "description": "IoT-enabled gadget with cloud connectivity",
+      "quantity_available": 200,
+      "unit_price": 2100.00,
+      "lead_time_days": 21,
+      "category": "Gadgets"
+    },
+    {
+      "sku": "COMPONENT-003",
+      "name": "Standard Component",
+      "description": "General-purpose component for assembly",
+      "quantity_available": 1000,
+      "unit_price": 450.00,
+      "lead_time_days": 7,
+      "category": "Components"
+    }
+  ]
+}
+

@@ -14,7 +14,7 @@ export function usePendingApprovals(pollInterval: number = 3000) {
   const [pendingCount, setPendingCount] = useState(0);
 
   useEffect(() => {
-    let intervalId: NodeJS.Timeout | null = null;
+    let intervalId: number | null = null;
 
     const checkPendingApprovals = async () => {
       if (!initialized || !keycloak.authenticated || !keycloak.token) {

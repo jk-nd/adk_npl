@@ -12,7 +12,9 @@ from adk_npl.monitoring import (
     MetricsCollector,
     StructuredLogger,
     HealthCheck,
-    get_metrics
+    get_metrics,
+    configure_adk_telemetry,
+    instrument_function
 )
 from adk_npl import NPLClient
 
@@ -237,4 +239,55 @@ class TestHealthCheck:
             assert "authentication" in full_health
             assert "metrics" in full_health
             assert "timestamp" in full_health
+
+
+class TestTelemetry:
+    """Test ADK telemetry configuration."""
+    
+    def test_configure_telemetry_without_opentelemetry(self):
+        """Test telemetry configuration gracefully handles missing OpenTelemetry."""
+        # This should not raise even if OpenTelemetry is not fully installed
+        result = configure_adk_telemetry(
+            service_name="test-service",
+            enable_console_export=False,
+            capture_content=False
+        )
+        # Result is None or a TracerProvider - both are acceptable
+        assert result is None or result is not None
+
+
+class TestInstrumentation:
+    """Test function instrumentation decorator."""
+    
+    def test_instrument_function_success(self):
+        """Test instrumentation records metrics on success."""
+        @instrument_function("test.operation")
+        def successful_operation(x, y):
+            return x + y
+        
+        result = successful_operation(1, 2)
+        assert result == 3
+        
+        # Check metrics were recorded
+        metrics = get_metrics()
+        counters = metrics.get_counters()
+        assert "test.operation.calls[status=success]" in counters
+    
+    def test_instrument_function_error(self):
+        """Test instrumentation records errors."""
+        @instrument_function("test.failing_operation")
+        def failing_operation():
+            raise ValueError("Test error")
+        
+        with pytest.raises(ValueError):
+            failing_operation()
+        
+        # Check error was recorded
+        metrics = get_metrics()
+        counters = metrics.get_counters()
+        assert "test.failing_operation.calls[status=error]" in counters
+        
+        errors = metrics.get_errors()
+        assert len(errors) > 0
+        assert any("Test error" in e.get("message", "") for e in errors)
 

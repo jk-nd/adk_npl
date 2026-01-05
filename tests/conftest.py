@@ -3,8 +3,13 @@ Pytest configuration and shared fixtures for ADK-NPL tests.
 """
 
 import os
+import sys
+from pathlib import Path
 import pytest
 from typing import Optional
+
+# Ensure project root on sys.path for local imports
+sys.path.append(str(Path(__file__).resolve().parents[1]))
 from unittest.mock import Mock
 
 from adk_npl import NPLConfig, NPLClient

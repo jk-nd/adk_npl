@@ -8,6 +8,7 @@ LLM agents are great at conversation, but struggle with **formal business proces
 - **No authorization** — Anyone can ask an agent to do anything  
 - **No audit trail** — "The agent approved it" isn't good enough for compliance
 - **No multi-party coordination** — How do two agents from different companies transact?
+- **No business rules** — LLMs don't know your contracts or policies
 
 Building these features from scratch for every agent is expensive and error-prone.
 
@@ -23,8 +24,8 @@ Building these features from scratch for every agent is expensive and error-pron
                       │
                       ▼
 ┌─────────────────────────────────────────────────────┐
-│                  ADK-NPL Bridge                     │
-│  "Schema-aware tool generation from OpenAPI"        │
+│               Smart NPL Bridge                      │
+│  "Schema-aware tools + embedded business rules"     │
 └─────────────────────┬───────────────────────────────┘
                       │
                       ▼
@@ -43,6 +44,7 @@ Building these features from scratch for every agent is expensive and error-pron
 | **Audit** | Log files | Immutable state transitions |
 | **Multi-party** | Custom integration | Federated identity + shared state |
 | **Workflow** | Ad-hoc | Formal state machines |
+| **Business Rules** | In prompts (ignored) | Enforced by engine |
 
 ## When to Use ADK-NPL
 
@@ -61,9 +63,11 @@ Building these features from scratch for every agent is expensive and error-pron
 - Real-time streaming use cases
 - Unstructured, ad-hoc conversations
 
-## Key Innovation: Schema-Aware Tool Generation
+## Key Innovation: Smart NPL Bridge
 
-The bridge doesn't just connect ADK to NPL — it makes the connection **LLM-friendly**.
+The bridge doesn't just connect ADK to NPL — it makes NPL contracts **LLM-understandable**.
+
+### 1. Schema-Aware Tool Generation
 
 Traditional approach (LLM struggles):
 ```python
@@ -83,7 +87,28 @@ def create_order(
     """Create a purchase order with the specified terms."""
 ```
 
-By parsing OpenAPI schemas and generating explicit typed parameters, the LLM sees exactly what it needs to provide.
+### 2. Embedded Business Rules
+
+The bridge parses NPL source code and embeds rules in tool docstrings:
+
+```
+### Business Rules (Policy)
+- require(price > 0, "Price must be positive")
+- require(quantity <= inventory, "Insufficient stock")
+
+### State Flow
+Draft → Published → Accepted
+
+### Party Actions
+- seller: publish, withdraw
+- buyer: accept, reject
+```
+
+Agents "read" the contract before calling tools.
+
+### 3. Standards Alignment
+
+Maps NPL types to industry standards (Schema.org, ISO 20022, GS1) for better LLM comprehension.
 
 ## Example: Cross-Company Commerce
 
@@ -94,17 +119,22 @@ By parsing OpenAPI schemas and generating explicit typed parameters, the LLM see
 │  Keycloak: buyer │                    │  Keycloak: seller│
 └────────┬─────────┘                    └────────┬─────────┘
          │                                       │
-         │  1. Request quote                     │
+         │  1. A2A: Request quote                │
          │──────────────────────────────────────>│
          │                                       │
-         │           2. Create Offer (NPL)       │
+         │           2. NPL: Create Offer        │
          │<──────────────────────────────────────│
          │                                       │
-         │  3. Accept Offer (NPL)                │
+         │  3. NPL: Accept Offer                 │
          │──────────────────────────────────────>│
          │                                       │
-         │  4. Create Order (NPL)                │
+         │  4. NPL: Create PurchaseOrder         │
          │──────────────────────────────────────>│
+         │                                       │
+         │     [Human approval if high-value]    │
+         │                                       │
+         │           5. NPL: Ship Order          │
+         │<──────────────────────────────────────│
          │                                       │
          └───────────────┬───────────────────────┘
                          │
@@ -124,24 +154,25 @@ Each agent authenticates with their own organization's identity provider. The NP
 
 ```bash
 # Clone and setup
-git clone https://github.com/jk-nd/adk_npl.git
-cd adk_npl
+git clone https://github.com/your-org/adk-demo.git
+cd adk-demo
 cp .env.example .env  # Add your Google API key
 
 # Start infrastructure
 ./scripts/setup-fresh.sh
 
 # Run the demo
-python3 simulate_negotiation.py
+python demo_inventory_chat.py
 ```
 
 ## Learn More
 
+- **[Why Agents Failed](WHY_AGENTS_FAILED.md)** — The journey from failing agents to NPL-assisted architecture
 - [Agent Architecture](AGENTS.md) — How agents are structured
 - [A2A Communication](A2A_COMMUNICATION.md) — Agent-to-agent patterns
+- [Monitoring](MONITORING.md) — Observability and metrics
 - [NPL Documentation](https://documentation.noumenadigital.com/) — Protocol language reference
 
 ---
 
 **ADK-NPL: Enterprise-grade stateful workflows for LLM agents.**
-

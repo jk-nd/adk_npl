@@ -1,92 +1,244 @@
-# ADK Monitoring & Observability
+# Monitoring & Observability
 
-ADK provides built-in tools for monitoring, debugging, and interacting with agents.
+This document explains the monitoring capabilities in the ADK-NPL demo.
 
-## 1. Web UI (Best for Interactive Testing)
+## Architecture
 
-The Web UI provides a visual interface to chat with agents.
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                        Frontend Dashboard                            │
+│   [Activity Log] [Metrics Dashboard] [Approvals]                    │
+└────────────────────────────────┬────────────────────────────────────┘
+                                 │
+                          HTTP API Calls
+                                 │
+┌────────────────────────────────▼────────────────────────────────────┐
+│                      Activity API (8002)                             │
+│                  FastAPI + In-Memory Metrics                        │
+└────────────────────────────────┬────────────────────────────────────┘
+                                 │
+                        Reads Activity Logs
+                                 │
+                    ┌────────────▼────────────┐
+                    │   logs/activity_*.json  │
+                    │   (Written by Agents)   │
+                    └─────────────────────────┘
+```
 
-### Start All Agents
+## Activity Logging
+
+### Log Events
+
+The `ActivityLogger` (`adk_npl/activity_logger.py`) writes structured JSON logs:
+
+```python
+from adk_npl.activity_logger import activity_logger
+
+# NPL API call
+activity_logger.log_npl_api_call(
+    method="POST",
+    endpoint="/npl/commerce/Product",
+    status_code=201,
+    response_time=0.234,
+    request_body={...},
+    response_body={...},
+    caller="buyer_agent"
+)
+
+# A2A message
+activity_logger.log_a2a_message(
+    from_agent="buyer_agent",
+    to_agent="supplier_agent",
+    message="I need to purchase 10 widgets",
+    direction="send"
+)
+
+# LLM call
+activity_logger.log_llm_call(
+    model="gemini-2.0-flash",
+    prompt_tokens=500,
+    completion_tokens=150,
+    latency_ms=1200
+)
+```
+
+### Log Format
+
+Logs are written in NDJSON format to `logs/activity_*.json`:
+
+```json
+{
+  "timestamp": "2025-01-03T12:34:56.789Z",
+  "event_type": "npl_api",
+  "actor": "buyer_agent",
+  "action": "POST /npl/commerce/Product",
+  "level": "info",
+  "details": {
+    "method": "POST",
+    "endpoint": "/npl/commerce/Product",
+    "status_code": 201,
+    "response_time_ms": 234,
+    "caller": "buyer_agent"
+  }
+}
+```
+
+## Metrics Collection
+
+### Built-in Metrics (`adk_npl/monitoring.py`)
+
+```python
+from adk_npl.monitoring import get_metrics
+
+metrics = get_metrics()
+
+# View summary
+summary = metrics.get_summary()
+print(f"Counters: {summary['counters']}")
+print(f"Errors: {summary['recent_errors']}")
+
+# Latency statistics
+stats = metrics.get_latency_stats("npl.api.latency")
+print(f"P50: {stats['p50']:.3f}s")
+print(f"P95: {stats['p95']:.3f}s")
+print(f"P99: {stats['p99']:.3f}s")
+```
+
+### Tracked Metrics
+
+| Metric | Description |
+|--------|-------------|
+| `npl.api.calls` | Count of NPL Engine API calls |
+| `npl.api.latency` | NPL API response times |
+| `npl.api.errors` | NPL API error count |
+| `a2a.messages` | A2A message count (send/receive) |
+| `llm.calls` | Gemini API call count |
+| `llm.latency` | Gemini API response times |
+
+## Activity API Endpoints
+
+### GET /activity/feed
+
+Returns recent activity events:
 
 ```bash
-cd /Users/juerg/development/adk-demo
-./run_adk.sh
+curl http://localhost:8002/activity/feed
 ```
 
-Open http://localhost:8000 and select an agent.
+Response:
+```json
+{
+  "events": [
+    {
+      "timestamp": "2025-01-03T12:34:56.789Z",
+      "event_type": "npl_api",
+      "actor": "buyer_agent",
+      "action": "POST /npl/commerce/Product",
+      "details": {...}
+    }
+  ]
+}
+```
 
-### What You'll See
+### GET /metrics
 
-- **Chat Interface**: Talk to your agent naturally
-- **Tool Calls**: See when the agent uses tools (NPL or business tools)
-- **Conversation History**: Review past interactions
-- **Response Streaming**: Watch the agent think in real-time
-
-## 2. Interactive CLI
-
-Run individual agents with detailed logging:
+Returns collected metrics:
 
 ```bash
-source .venv/bin/activate
-export PYTHONPATH=.
-
-# Purchasing agent
-adk run agents/purchasing
-
-# Supplier agent
-adk run agents/supplier
+curl http://localhost:8002/metrics
 ```
 
-## 3. API Server
+Response:
+```json
+{
+  "counters": {
+    "npl_api_calls": 45,
+    "a2a_messages": 12,
+    "llm_calls": 28
+  },
+  "latencies": {
+    "npl_api": {"p50": 0.15, "p95": 0.45, "p99": 0.89},
+    "llm": {"p50": 1.2, "p95": 2.1, "p99": 3.5}
+  }
+}
+```
 
-Start a REST API server for integration:
+### GET /health
+
+Health check endpoint:
 
 ```bash
-PYTHONPATH=. adk api_server agents/purchasing --port 8001
-PYTHONPATH=. adk api_server agents/supplier --port 8002
+curl http://localhost:8002/health
 ```
 
-### API Endpoints
+## Frontend Dashboard
+
+### Activity Log Tab
+
+- Real-time feed of all activity
+- Color-coded by event type:
+  - 🔵 NPL Engine calls
+  - 🟢 A2A messages
+  - 🟡 LLM calls
+  - 🔴 Errors
+- Expandable details for each event
+- Filter toggles by event type
+
+### Metrics Dashboard Tab
+
+- **Counters**: Total calls by type
+- **Latencies**: P50/P95/P99 percentiles
+- **Errors**: Recent error list (collapsible)
+
+### Theme Toggle
+
+Dark/light mode toggle in the header.
+
+## Starting the Monitoring Stack
+
+### 1. Start Activity API
 
 ```bash
-# Send a message
-curl -X POST http://localhost:8001/chat \
-  -H "Content-Type: application/json" \
-  -d '{"message": "Create a proposal for 100 widgets"}'
-
-# Get conversation history
-curl http://localhost:8001/history
+cd activity_api && ./run.sh
 ```
 
-## What Gets Monitored
+### 2. Access Dashboard
 
-### Tool Usage
-Every tool call shows:
-- Tool name and parameters
-- Return value
-- Execution time
+Open http://localhost:5173 and click "Activity" or "Metrics" tabs.
 
-**Example:**
+## Health Checks
+
+### Using the HealthCheck Class
+
+```python
+from adk_npl.monitoring import HealthCheck
+from adk_npl import NPLClient
+
+client = NPLClient(base_url="http://localhost:12000", auth_token="...")
+health = HealthCheck(client)
+
+# Check NPL Engine
+engine_status = health.check_engine_health()
+print(f"Engine: {engine_status['status']}")
+
+# Full health report
+full_health = health.get_full_health()
 ```
-🔧 Tool: npl_commerce_Product_create
-   Input: {name: "Widget", category: "Industrial", ...}
-   Output: {@id: "abc-123", @state: "active"}
-   Duration: 234ms
-```
 
-### LLM Interactions
-- Prompts sent to Gemini
-- Token usage
-- Latency
+## Troubleshooting
 
-### Errors
-- Stack traces
-- Failed tool calls
-- NPL protocol errors
-- Authentication issues
+### No Activity Events
 
-## Observability Tips
+1. Check `logs/` directory for `activity_*.json` files
+2. Ensure Activity API is running on port 8002
+3. Check Chat API logs for activity logger initialization
 
-1. **Use Web UI for demos** - Best visual experience
-2. **Use CLI for debugging** - See detailed logs
-3. **Use API for testing** - Automate scenarios
+### Missing Metrics
+
+1. Verify agents are running and making API calls
+2. Check Activity API logs for errors
+3. Refresh the dashboard
+
+### Stale Data
+
+The Activity API reads from log files periodically. New events appear within 1-2 seconds.

@@ -6,6 +6,29 @@ use schemaorg.v1.OfferStatus;
 use commerce.Product;
 
 /**
+ * Notification sent to buyer when an offer is published and ready for review.
+ * The protocolId in the notification payload is the Offer ID to use with npl_commerce_Offer_next_actions.
+ * @param productName Name of the product being offered
+ * @param price The offered price
+ * @param quantity Available quantity
+ * @param deliveryDays Expected delivery time in days
+ */
+notification OfferPublishedNotification(productName: Text, price: Number, quantity: Number, deliveryDays: Number) returns Unit;
+
+/**
+ * Notification sent to seller when buyer accepts the offer.
+ * The protocolId is the accepted Offer. Seller should now await a PurchaseOrder.
+ * @param productName Name of the product
+ */
+notification OfferAcceptedNotification(productName: Text) returns Unit;
+
+/**
+ * Notification sent to seller when buyer rejects the offer.
+ * @param productName Name of the product
+ */
+notification OfferRejectedNotification(productName: Text) returns Unit;
+
+/**
  * Offer - Based on schema.org/Offer
  * 
  * An offer to transfer some rights to an item or to provide a service.
@@ -65,6 +88,7 @@ protocol[seller, buyer] Offer(
         require(now().isBefore(validThrough, false), "Offer validity period has passed");
         status = OfferStatus.Published;
         updatedAt = now();
+        notify OfferPublishedNotification(itemOffered.name, priceSpecification.price, availableQuantity.value, deliveryLeadTime);
         become published;
     };
     
@@ -77,6 +101,7 @@ protocol[seller, buyer] Offer(
         require(now().isBefore(validThrough, false), "Offer has expired");
         status = OfferStatus.Accepted;
         updatedAt = now();
+        notify OfferAcceptedNotification(itemOffered.name);
         become accepted;
     };
     
@@ -87,8 +112,9 @@ protocol[seller, buyer] Offer(
     permission[buyer] reject() | published {
         status = OfferStatus.Rejected;
         updatedAt = now();
+        notify OfferRejectedNotification(itemOffered.name);
         become rejected;
-    }
+    };
     
     /**
      * Withdraw the offer (seller withdraws)
@@ -98,7 +124,7 @@ protocol[seller, buyer] Offer(
         status = OfferStatus.Withdrawn;
         updatedAt = now();
         become withdrawn;
-    }
+    };
     
     /**
      * Update the price (only in draft state)
@@ -113,7 +139,7 @@ protocol[seller, buyer] Offer(
             validThrough = priceSpecification.validThrough
         );
         updatedAt = now();
-    }
+    };
     
     /**
      * Update available quantity (only in draft state)
@@ -127,7 +153,7 @@ protocol[seller, buyer] Offer(
             unitText = availableQuantity.unitText
         );
         updatedAt = now();
-    }
+    };
     
     /**
      * Check if offer has expired
@@ -140,5 +166,4 @@ protocol[seller, buyer] Offer(
             become expired;
         };
     };
-}
-
+};

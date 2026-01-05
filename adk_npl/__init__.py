@@ -27,7 +27,9 @@ from .monitoring import (
     StructuredLogger,
     MetricsCollector,
     HealthCheck,
-    get_metrics
+    get_metrics,
+    configure_adk_telemetry,
+    instrument_function
 )
 from .activity_logger import (
     ActivityLogger,
@@ -38,6 +40,8 @@ from .protocol_memory import (
     NPLProtocolMemory,
     create_memory_tools
 )
+from .agent_logic import GLOBAL_AGENT_RULES
+from .tool_filter import ToolFilter
 
 __version__ = "0.1.0"
 
@@ -73,11 +77,13 @@ __all__ = [
     "TokenExpiredError",
     "ServiceUnavailableError",
     
-    # Monitoring
+    # Monitoring & Telemetry
     "StructuredLogger",
     "MetricsCollector",
     "HealthCheck",
     "get_metrics",
+    "configure_adk_telemetry",
+    "instrument_function",
     
     # Activity Logging
     "ActivityLogger",
@@ -87,5 +93,9 @@ __all__ = [
     # Protocol Memory
     "NPLProtocolMemory",
     "create_memory_tools",
+    "GLOBAL_AGENT_RULES",
+    
+    # Tool Filtering
+    "ToolFilter"
 ]
 

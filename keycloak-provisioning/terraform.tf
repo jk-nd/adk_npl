@@ -293,7 +293,7 @@ resource "keycloak_user" "approver" {
 
   attributes = {
     "organization" = "Acme Corp"
-    "department"   = "Finance"
+    "department"   = "Management"
   }
 
   initial_password {

@@ -1,0 +1,19 @@
+{
+  "needs": [
+    {
+      "item": "Premium Widget",
+      "desired_quantity": 100,
+      "max_budget_per_unit": 1500.00,
+      "urgency": "medium",
+      "notes": "Needed for Q2 production run"
+    },
+    {
+      "item": "Smart Gadget",
+      "desired_quantity": 50,
+      "max_budget_per_unit": 2500.00,
+      "urgency": "high",
+      "notes": "Required for new product line"
+    }
+  ]
+}
+

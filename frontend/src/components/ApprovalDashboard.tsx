@@ -36,6 +36,10 @@ export default function ApprovalDashboard() {
     try {
       setLoading(true);
       
+      // #region agent log
+      console.log('[ApprovalDashboard] Querying for PurchaseOrders with state=ApprovalRequired, party=approver');
+      // #endregion
+      
       const { data, error } = await client.GET('/npl/commerce/PurchaseOrder/', {
         params: {
           query: {
@@ -44,7 +48,18 @@ export default function ApprovalDashboard() {
             pageSize: 50,
           },
         },
+        headers: {
+          'X-Party': 'approver',
+        },
       });
+
+      // #region agent log
+      console.log('[ApprovalDashboard] Query response:', { 
+        hasError: !!error, 
+        itemCount: data?.items?.length || 0,
+        items: data?.items?.map((o: any) => ({ id: o['@id'], state: o['@state'], total: o.total }))
+      });
+      // #endregion
 
       if (error) {
         setError((error as any)?.message ? String((error as any).message) : `Failed to load orders`);
@@ -53,6 +68,9 @@ export default function ApprovalDashboard() {
 
       setOrders(data?.items || []);
     } catch (err) {
+      // #region agent log
+      console.error('[ApprovalDashboard] Query error:', err);
+      // #endregion
       setError(`Error: ${err}`);
     } finally {
       setLoading(false);

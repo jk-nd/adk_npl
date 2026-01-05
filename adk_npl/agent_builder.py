@@ -14,6 +14,7 @@ from .client import NPLClient
 from .auth import create_auth_strategy
 from .tools import NPLToolGenerator
 from .utils import AuthenticationError
+from .agent_logic import GLOBAL_AGENT_RULES
 
 logger = logging.getLogger(__name__)
 

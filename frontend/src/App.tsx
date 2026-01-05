@@ -13,9 +13,11 @@ import { usePendingApprovals } from './hooks/usePendingApprovals';
 import ApprovalDashboard from './components/ApprovalDashboard';
 import { ActivityLog } from './components/ActivityLog';
 import { MetricsDashboard } from './components/MetricsDashboard';
+import { BuyerChat } from './components/BuyerChat';
+import { SupplierChat } from './components/SupplierChat';
 import './App.css';
 
-type Tab = 'approvals' | 'activity' | 'metrics';
+type Tab = 'approvals' | 'buyer' | 'supplier' | 'activity' | 'metrics';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -39,14 +41,166 @@ function ThemeToggle() {
   );
 }
 
+function RestartButton() {
+  const [isRestarting, setIsRestarting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  
+  const handleRestart = async () => {
+    if (window.confirm('Complete restart? This will reload agents, refetch OpenAPI specs, and clear all history.')) {
+      setIsRestarting(true);
+      setError(null);
+      
+      try {
+        const response = await fetch('http://localhost:8001/restart-session', { 
+          method: 'POST',
+          signal: AbortSignal.timeout(5000) // 5 second timeout
+        });
+        
+        if (!response.ok) {
+          throw new Error(`Server returned ${response.status}`);
+        }
+        
+        // Server is restarting - wait and reload
+        setTimeout(() => {
+          window.location.reload();
+        }, 8000);
+      } catch (e: any) {
+        // Network error is expected when server restarts
+        if (e.name === 'AbortError' || e.message?.includes('fetch')) {
+          // Server is restarting - this is expected
+          setTimeout(() => {
+            window.location.reload();
+          }, 8000);
+        } else {
+          // Unexpected error
+          setError('Restart failed. Please check the server logs.');
+          setIsRestarting(false);
+          setTimeout(() => setError(null), 5000);
+        }
+      }
+    }
+  };
+  
+  return (
+    <div style={{ position: 'relative' }}>
+      <button
+        className="restart-button"
+        onClick={handleRestart}
+        disabled={isRestarting}
+        title="Complete restart (reload agents & OpenAPI)"
+      >
+        {isRestarting ? '...' : '↻'}
+      </button>
+      {error && (
+        <div style={{
+          position: 'absolute',
+          top: '100%',
+          right: 0,
+          marginTop: '4px',
+          padding: '4px 8px',
+          background: '#ef4444',
+          color: 'white',
+          borderRadius: '4px',
+          fontSize: '12px',
+          whiteSpace: 'nowrap',
+          zIndex: 1000
+        }}>
+          {error}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ShutdownButton() {
+  const [isShuttingDown, setIsShuttingDown] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  
+  const handleShutdown = async () => {
+    if (window.confirm('Are you sure you want to stop the demo? The server will shut down.')) {
+      setIsShuttingDown(true);
+      setError(null);
+      
+      try {
+        const response = await fetch('http://localhost:8001/shutdown', { 
+          method: 'POST',
+          signal: AbortSignal.timeout(5000)
+        });
+        
+        if (!response.ok) {
+          throw new Error(`Server returned ${response.status}`);
+        }
+        
+        // Server is shutting down - show message
+        alert('Server is shutting down. The demo will stop.');
+      } catch (e: any) {
+        // Network error is expected when server shuts down
+        if (e.name === 'AbortError' || e.message?.includes('fetch')) {
+          // Server shut down - this is expected
+          alert('Server is shutting down. The demo has stopped.');
+        } else {
+          // Unexpected error
+          setError('Shutdown failed. Please check the server logs.');
+          setIsShuttingDown(false);
+          setTimeout(() => setError(null), 5000);
+        }
+      }
+    }
+  };
+  
+  return (
+    <div style={{ position: 'relative' }}>
+      <button
+        className="shutdown-button"
+        onClick={handleShutdown}
+        disabled={isShuttingDown}
+        title="Stop the demo"
+      >
+        {isShuttingDown ? '...' : '⏹'}
+      </button>
+      {error && (
+        <div style={{
+          position: 'absolute',
+          top: '100%',
+          right: 0,
+          marginTop: '4px',
+          padding: '4px 8px',
+          background: '#ef4444',
+          color: 'white',
+          borderRadius: '4px',
+          fontSize: '12px',
+          whiteSpace: 'nowrap',
+          zIndex: 1000
+        }}>
+          {error}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function TabNavigation() {
-  const [activeTab, setActiveTab] = useState<Tab>('approvals');
+  const [activeTab, setActiveTab] = useState<Tab>('buyer');
   const { hasPending, pendingCount } = usePendingApprovals(3000);
 
   return (
     <div className="app-container">
       <nav className="app-tabs">
         <div className="tab-buttons">
+          <button
+            className={`tab-button ${activeTab === 'buyer' ? 'active' : ''}`}
+            onClick={() => setActiveTab('buyer')}
+          >
+            <span className="tab-icon">🛒</span>
+            <span className="tab-label">Buyer</span>
+          </button>
+          <button
+            className={`tab-button ${activeTab === 'supplier' ? 'active' : ''}`}
+            onClick={() => setActiveTab('supplier')}
+          >
+            <span className="tab-icon">📦</span>
+            <span className="tab-label">Supplier</span>
+          </button>
           <button
             className={`tab-button ${activeTab === 'approvals' ? 'active' : ''}`}
             onClick={() => setActiveTab('approvals')}
@@ -70,9 +224,15 @@ function TabNavigation() {
             <span className="tab-label">Metrics</span>
           </button>
         </div>
-        <ThemeToggle />
+        <div className="nav-controls">
+          <RestartButton />
+          <ThemeToggle />
+          <ShutdownButton />
+        </div>
       </nav>
       <div className="tab-content">
+        {activeTab === 'buyer' && <BuyerChat />}
+        {activeTab === 'supplier' && <SupplierChat />}
         {activeTab === 'approvals' && <ApprovalDashboard />}
         {activeTab === 'activity' && <ActivityLog />}
         {activeTab === 'metrics' && <MetricsDashboard />}

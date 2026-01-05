@@ -2,149 +2,183 @@
 
 ## Overview
 
-This project implements two autonomous agents using Google's ADK with dynamic NPL protocol integration:
+This project implements two autonomous agents using Google's Agent Development Kit (ADK) with NPL integration:
 
-1. **Purchasing Agent** - Buyer-side procurement
-2. **Supplier Agent** - Seller-side sales
+1. **Purchasing Agent** - Buyer-side procurement (Acme Corp)
+2. **Supplier Agent** - Seller-side sales (Supplier Inc)
 
-Both agents are **completely protocol-agnostic** and work with any NPL protocols deployed to the engine.
+Both agents use the **Smart NPL Bridge** to dynamically discover and understand NPL protocols.
 
 ## Key Design Principles
 
-### 1. Protocol Independence
+### 1. Goal-Oriented Autonomy
 
-The agents make **no assumptions** about which NPL protocols exist. They:
-- Dynamically discover available protocols from the NPL Engine's Swagger UI
-- Generate tools on-the-fly from OpenAPI specifications
-- Work equally well with commerce, fund management, or any other NPL packages
+Agents are given high-level objectives, not step-by-step instructions:
 
-### 2. Schema-Aware Tool Generation
+- **Buyer**: "Purchase all items on the shopping list"
+- **Supplier**: "Register products and fulfill orders"
 
-NPL tools are generated with **explicit typed parameters** from OpenAPI schemas:
+They discover the required actions from the tool descriptions.
+
+### 2. Smart NPL Bridge
+
+Agents learn workflow rules from enriched tool docstrings:
+
+```
+### Workflow Summary
+States: Draft → Published → Accepted
+Parties: seller, buyer
+
+### Party Actions
+seller: publish, withdraw, updatePrice
+buyer: accept, reject
+
+### Business Rules
+- require(price > 0, "Price must be positive")
+- require(quantity <= inventory, "Insufficient stock")
+```
+
+### 3. Schema-Aware Tool Generation
+
+NPL tools have explicit typed parameters:
 
 ```python
-# Generated tool signature (not **kwargs!)
 def npl_commerce_Product_create(
-    category: str,
-    description: str,
-    itemCondition: str,  # Enum: NewCondition, UsedCondition, etc.
-    name: str,
-    seller_department: str,
-    seller_organization: str,
-    sku: str,
-    brand: str = None,
-    gtin: str = None
+    category: str,           # Required
+    description: str,        # Required  
+    itemCondition: str,      # Required: NewCondition, UsedCondition
+    name: str,               # Required
+    seller_department: str,  # Required
+    seller_organization: str,# Required
+    sku: str,                # Required
+    gtin: str,               # Required
+    brand: str = None        # Optional
 ) -> dict
 ```
 
-Benefits:
-- LLM sees exact parameters needed
-- Self-documenting via docstrings
-- Required params first, optional params last
+### 4. NPL-Assisted Decision Loop
 
-### 3. Federated Identity
+Agents follow the **ORIENT → DECIDE → ACT → STOP** pattern:
+
+1. **ORIENT**: Query NPL for current state and valid actions
+   - Use `npl_*_next_actions()` to get authoritative state information
+   - This is NOT inferred from conversation context
+   
+2. **DECIDE**: Use judgment + A2A negotiation to choose action
+   - Agent decides what's BEST (NPL tells what's POSSIBLE)
+   - Natural language negotiation via A2A when needed
+   
+3. **ACT**: Execute ONE action
+   - NPL validates and blocks if invalid
+   - No more state confusion - NPL is the gatekeeper
+   
+4. **STOP**: Let the other party respond
+   - Turn-based prevents ping-pong
+   - NPL notifications wake agent when it's their turn
+
+See [`docs/WHY_AGENTS_FAILED.md`](WHY_AGENTS_FAILED.md) for the complete journey.
+
+### 5. Protocol Creation Principle
+
+**CRITICAL**: Only the party at the START of the workflow sequence should instantiate a protocol.
+
+For the `Product → Offer → PurchaseOrder` workflow:
+- **Supplier creates Product** (seller is sole party, can act from initial state)
+- **Supplier creates Offer** (seller must publish from initial state, buyer joins later)
+- **Buyer creates PurchaseOrder** (buyer initiates the order after accepting an offer)
+
+This is enforced through:
+1. **Dynamic Role Detection**: The Smart Bridge analyzes which party has permissions to act from the protocol's `initial state`
+2. **Tool Docstring Guidance**: Each multi-party protocol creation tool includes "WHO CREATES THIS PROTOCOL?" guidance
+3. **Workflow Sequence Awareness**: Tools document dependencies (e.g., "Offer requires Product")
+
+This prevents agents from creating protocols out of sequence or with incorrect party roles.
+
+### 6. Enterprise ADK Callbacks
+
+Agents use ADK's callback system for robust behavior:
+
+| Callback | Purpose |
+|----------|---------|
+| `before_tool_callback` | Enforce max 15 tool calls per turn, record metrics |
+| `after_tool_callback` | Log tool completions, record latency |
+| `on_tool_error_callback` | Categorize NPL errors, provide guidance, record errors |
+| `on_model_error_callback` | Rate limit backoff (429 handling) |
+
+### 7. Federated Identity
 
 Each agent authenticates with its own Keycloak realm:
-- **Purchasing Agent** → `purchasing` realm (Acme Corp)
-- **Supplier Agent** → `supplier` realm (Supplier Inc)
 
-The NPL Engine trusts both issuers.
+| Agent | Realm | Organization |
+|-------|-------|--------------|
+| Purchasing Agent | `purchasing` | Acme Corp |
+| Supplier Agent | `supplier` | Supplier Inc |
 
-### 4. Hybrid Tool Architecture
+## Agent Structure
 
-Each agent has two types of tools:
+### Purchasing Agent (`purchasing_agent/agent.py`)
 
-**NPL Protocol Tools (Dynamic)**
-- Auto-discovered from the engine
-- Example: `npl_commerce_Product_create`, `npl_commerce_Offer_publish`
-- Purpose: Formal protocol execution, state management, audit trails
+**Location**: Acme Corp, Procurement Department
 
-**Business Logic Tools (Static)**
-- Domain-specific reasoning
-- Example: `evaluate_proposal`, `calculate_counter_offer`
-- Purpose: Decision-making, negotiation strategy
+**Tools**:
+- `get_my_identity` - Get agent's party claims
+- `list_shopping_items` - View shopping list
+- `recall_my_protocols` - Check existing protocols
+- `send_message_to_supplier` - A2A communication
+- `npl_*` - All NPL protocol tools
 
-## Purchasing Agent
+**Inventory**: `data/buyer_shopping_list.json`
 
-**Mission**: Maximize value within budget constraints
+### Supplier Agent (`supplier_agent/agent.py`)
 
-**Business Tools**:
-- `propose_framework` - Propose protocol framework
-- `create_proposal` - Generate purchase proposals
-- `evaluate_proposal` - Assess supplier offers
-- `calculate_counter_offer` - Negotiate lower prices
-- `get_budget_status` - Check budget and constraints
+**Location**: Supplier Inc, Sales Department
 
-**Key Parameters**:
-- `budget` - Maximum spend (hard limit)
-- `requirements` - What to purchase
-- `constraints` - Delivery, quality requirements
-- `strategy` - Negotiation approach
+**Tools**:
+- `get_my_identity` - Get agent's party claims
+- `list_inventory_products` - View available inventory
+- `recall_my_protocols` - Check existing protocols
+- `send_message_to_buyer` - A2A communication
+- `npl_*` - All NPL protocol tools
 
-## Supplier Agent
+**Inventory**: `data/supplier_inventory.json`
 
-**Mission**: Maximize revenue while maintaining profitability
+## Usage
 
-**Business Tools**:
-- `agree_framework` - Accept protocol framework
-- `create_offer` - Generate sales offers
-- `evaluate_purchase_request` - Assess buyer requests
-- `calculate_counter_offer` - Negotiate higher prices
-- `get_inventory_status` - Check inventory and capacity
+### Via Demo Script
 
-**Key Parameters**:
-- `min_price` - Minimum acceptable price (floor)
-- `inventory` - Available products/services
-- `capacity` - Production/delivery constraints
-- `strategy` - Sales approach
-
-## Usage Examples
-
-### Create Purchasing Agent
-
-```python
-from purchasing_agent import create_purchasing_agent
-from adk_npl import NPLConfig
-
-config = NPLConfig(
-    engine_url="http://localhost:12000",
-    keycloak_url="http://localhost:11000",
-    keycloak_realm="purchasing",
-    keycloak_client_id="purchasing",
-    credentials={"username": "purchasing_agent", "password": "Welcome123"}
-)
-
-agent = await create_purchasing_agent(
-    config=config,
-    agent_id="buyer_001",
-    budget=50000.0,
-    requirements="100 widgets",
-    constraints={"max_delivery_days": 30},
-    strategy="Negotiate for best value"
-)
+```bash
+./start_demo.sh
 ```
 
-### Create Supplier Agent
+This starts all services including agents. Open http://localhost:5173 to interact.
+
+Agents are exposed via SSE chat endpoints:
+- Buyer: `POST http://localhost:8001/chat/buyer`
+- Supplier: `POST http://localhost:8001/chat/supplier`
+
+### Programmatic Creation
 
 ```python
-from supplier_agent import create_supplier_agent
+from purchasing_agent.agent import create_purchasing_agent
+from supplier_agent.agent import create_supplier_agent
 from adk_npl import NPLConfig
+from google.adk.sessions import InMemorySessionService
 
-config = NPLConfig(
-    engine_url="http://localhost:12000",
-    keycloak_url="http://localhost:11000",
-    keycloak_realm="supplier",
-    keycloak_client_id="supplier",
-    credentials={"username": "supplier_agent", "password": "Welcome123"}
+config = NPLConfig.from_env()
+session_service = InMemorySessionService()
+
+# Create buyer agent
+buyer = await create_purchasing_agent(
+    config=config,
+    session_service=session_service,
+    agent_id="buyer_agent"
 )
 
-agent = await create_supplier_agent(
+# Create supplier agent  
+supplier = await create_supplier_agent(
     config=config,
-    agent_id="supplier_001",
-    min_price=15.0,
-    inventory={"widgets": 5000},
-    capacity={"max_quantity": 10000},
-    strategy="Maximize margin"
+    session_service=session_service,
+    agent_id="supplier_agent"
 )
 ```
 
@@ -154,38 +188,33 @@ agent = await create_supplier_agent(
 ┌─────────────────────┐                    ┌─────────────────────┐
 │  Purchasing Agent   │                    │   Supplier Agent    │
 ├─────────────────────┤                    ├─────────────────────┤
-│ Budget: $50,000     │                    │ Min Price: $15/unit │
-└──────────┬──────────┘                    └──────────┬──────────┘
+│ "Acme Corp"         │       A2A          │ "Supplier Inc"      │
+└──────────┬──────────┘◄──────────────────►└──────────┬──────────┘
            │                                          │
-           │ 1. propose_framework("schema.org")       │
+           │                    Product_create()      │
+           │                    Offer_create()        │
+           │                    Offer_publish()       │
+           │<─────────────────────────────────────────│
+           │                                          │
+           │ Offer_accept()                           │
+           │ PurchaseOrder_create()                   │
            │─────────────────────────────────────────>│
            │                                          │
-           │                    2. agree_framework()  │
+           │      [Approval if high-value]            │
+           │                                          │
+           │                    PurchaseOrder_ship()  │
            │<─────────────────────────────────────────│
            │                                          │
-           │      3. npl_commerce_Product_create()    │
-           │      4. npl_commerce_Offer_create()      │
-           │      5. npl_commerce_Offer_publish()     │
-           │<─────────────────────────────────────────│
-           │                                          │
-           │ 6. evaluate_proposal()                   │
-           │ 7. npl_commerce_Offer_accept()           │
-           │────────────┐                  ┌──────────│
-           │            │                  │          │
-           │            ▼                  ▼          │
-           │      ┌──────────────────────────┐        │
-           │      │      NPL Engine          │        │
-           │      │  (Shared Protocol State) │        │
-           │      └──────────────────────────┘        │
+           └───────────► NPL Engine ◄─────────────────┘
+                     (Shared Protocol State)
 ```
 
 ## Testing
 
 ```bash
-# Agent creation tests
-pytest tests/test_purchasing_agent.py -s
-pytest tests/test_supplier_agent.py -s
+# Run agent creation tests
+pytest tests/test_agent_core.py -v
 
-# Backend integration tests
-pytest tests/ -m integration -s -v
+# Full test suite
+./run_tests.sh
 ```

@@ -34,32 +34,94 @@ const eventTypeIcons: Record<string, { icon: string; class: string }> = {
   demo: { icon: '▸', class: 'icon-demo' },
   llm_call: { icon: '◎', class: 'icon-llm' },
   // A2A events
-  a2a_demo: { icon: '⇄', class: 'icon-a2a' },
-  a2a_transfer: { icon: '⇢', class: 'icon-a2a' },
-  a2a_response: { icon: '⇠', class: 'icon-a2a' },
   a2a_message: { icon: '↔', class: 'icon-a2a-message' },
+  // Agent internal events
+  agent_thinking: { icon: '💭', class: 'icon-thinking' },
+  // Human approval events
+  approval_required: { icon: '⚠️', class: 'icon-approval' },
 };
 
-// A2A message types that are hidden by default
-const A2A_VERBOSE_TYPES = ['a2a_message'];
+// Verbose event types that can be toggled (A2A details and agent thinking)
+const A2A_VERBOSE_TYPES = ['a2a_message', 'agent_thinking'];
+
+// All available event types organized by category (only actively used types)
+const EVENT_TYPE_CATEGORIES = {
+  'Agent Activity': ['agent_action', 'agent_reasoning', 'agent_message', 'agent_thinking'],
+  'A2A Communication': ['a2a_message'],
+  'NPL Engine': ['npl_api', 'state_transition', 'bridge_operation'],
+  'System': ['llm_call', 'authentication'],
+  'Human Actions': ['approval_required']
+};
+
+const EVENT_TYPE_LABELS: Record<string, string> = {
+  agent_action: 'Agent Actions',
+  agent_reasoning: 'Agent Reasoning', 
+  agent_message: 'Agent Messages',
+  agent_thinking: 'Agent Thinking',
+  a2a_message: 'A2A Messages',
+  npl_api: 'NPL API Calls',
+  state_transition: 'State Transitions',
+  bridge_operation: 'Bridge Operations',
+  llm_call: 'LLM Calls',
+  authentication: 'Authentication',
+  approval_required: 'Approval Required'
+};
 
 export function ActivityLog() {
-  const [filter, setFilter] = useState<'all' | string>('all');
+  const [selectedTypes, setSelectedTypes] = useState<Set<string>>(new Set(['all']));
   const [autoRefresh, setAutoRefresh] = useState(true);
-  const [showA2ADetails, setShowA2ADetails] = useState(false);
+  const [showA2ADetails, setShowA2ADetails] = useState(true);
+  const [filterOpen, setFilterOpen] = useState(false);
 
-  // Fetch recent activity
+  const isAllSelected = selectedTypes.has('all');
+
+  const toggleType = (type: string) => {
+    const newSelected = new Set(selectedTypes);
+    if (type === 'all') {
+      // Toggle "all" - if selected, clear everything; if not, select all
+      if (isAllSelected) {
+        newSelected.clear();
+      } else {
+        newSelected.clear();
+        newSelected.add('all');
+      }
+    } else {
+      // Toggle specific type
+      newSelected.delete('all'); // Remove "all" when selecting specific types
+      if (newSelected.has(type)) {
+        newSelected.delete(type);
+      } else {
+        newSelected.add(type);
+      }
+      // If nothing selected, default to "all"
+      if (newSelected.size === 0) {
+        newSelected.add('all');
+      }
+    }
+    setSelectedTypes(newSelected);
+  };
+
+  const getFilterLabel = () => {
+    if (isAllSelected) return 'All Events';
+    if (selectedTypes.size === 1) return EVENT_TYPE_LABELS[Array.from(selectedTypes)[0]] || 'Filter';
+    return `${selectedTypes.size} types`;
+  };
+
+  // Fetch recent activity (always fetch all, filter client-side for multi-select)
   const { data: events, refetch } = useQuery<ActivityEvent[]>({
-    queryKey: ['activity', 'recent', filter], // Include filter in query key to trigger refetch
+    queryKey: ['activity', 'recent'],
     queryFn: async () => {
-      const url = filter === 'all' 
-        ? `${ACTIVITY_API_URL}/api/activity/logs?limit=200`
-        : `${ACTIVITY_API_URL}/api/activity/by-type/${filter}?limit=200`;
-      const response = await fetch(url);
+      const response = await fetch(`${ACTIVITY_API_URL}/api/activity/logs?limit=200`);
       if (!response.ok) throw new Error('Failed to fetch activity');
       return response.json();
     },
-    refetchInterval: autoRefresh ? 2000 : false, // Refresh every 2 seconds if enabled
+    refetchInterval: autoRefresh ? 2000 : false,
+  });
+
+  // Filter events based on selected types
+  const filteredEvents = events?.filter(event => {
+    if (isAllSelected) return true;
+    return selectedTypes.has(event.event_type);
   });
 
   const formatTimestamp = (timestamp: string) => {
@@ -85,13 +147,47 @@ export function ActivityLog() {
     }
   };
 
+  // For certain event types, show the target system instead of the actor
+  const getDisplayActor = (event: ActivityEvent): { label: string; isTarget: boolean } => {
+    switch (event.event_type) {
+      case 'npl_api':
+        return { label: 'NPL Engine', isTarget: true };
+      case 'llm_call':
+        return { label: 'LLM', isTarget: true };
+      case 'authentication':
+        return { label: 'Keycloak', isTarget: true };
+      case 'bridge_operation':
+        return { label: 'NPL Bridge', isTarget: true };
+      case 'a2a_message':
+        // For A2A messages, show "A2A" as the communication type
+        return { label: 'A2A', isTarget: true };
+      case 'approval_required':
+        // For approval events, show "Human Approver" as the target
+        return { label: 'Human Approver', isTarget: true };
+      default:
+        return { label: event.actor, isTarget: false };
+    }
+  };
+
+  const getTargetColor = (label: string) => {
+    switch (label) {
+      case 'NPL Engine': return '#10b981';  // Green
+      case 'LLM': return '#8b5cf6';          // Purple
+      case 'Keycloak': return '#f59e0b';     // Amber
+      case 'Human Approver': return '#ef4444'; // Red (urgent)
+      case 'NPL Bridge': return '#06b6d4';   // Cyan
+      case 'A2A': return '#f43f5e';          // Rose (agent-to-agent)
+      default: return '#64748b';             // Slate
+    }
+  };
+
   return (
     <div className="activity-log-container">
       {/* Header */}
       <div className="activity-log-header">
         <div className="header-left">
           <h2>Activity Feed</h2>
-          <span className="event-count">{events?.length || 0} events</span>
+          <span className="event-count">{filteredEvents?.length || 0} events</span>
         </div>
         <div className="activity-log-controls">
           <label className="auto-refresh-toggle">
@@ -102,26 +198,50 @@ export function ActivityLog() {
             />
             <span>Auto</span>
           </label>
-          <label className="a2a-toggle" title="Show detailed A2A HTTP messages">
+          <label className="a2a-toggle" title="Show detailed A2A messages and agent thinking">
             <input
               type="checkbox"
               checked={showA2ADetails}
               onChange={(e) => setShowA2ADetails(e.target.checked)}
             />
-            <span>A2A Details</span>
+            <span>Verbose</span>
           </label>
-          <select className="compact-filter" value={filter} onChange={(e) => setFilter(e.target.value)}>
-            <option value="all">All Events</option>
-            <option value="agent_action">Agent Actions</option>
-            <option value="agent_reasoning">Agent Reasoning</option>
-            <option value="agent_message">Agent Messages</option>
-            <option value="a2a_demo">A2A Communication</option>
-            <option value="a2a_transfer">A2A Transfers</option>
-            <option value="npl_api">API Calls</option>
-            <option value="state_transition">State Transitions</option>
-            <option value="authentication">Authentication</option>
-            <option value="demo">Demo</option>
-          </select>
+          <div className="filter-dropdown-container">
+            <button 
+              className="filter-dropdown-btn" 
+              onClick={() => setFilterOpen(!filterOpen)}
+            >
+              {getFilterLabel()} ▾
+            </button>
+            {filterOpen && (
+              <div className="filter-dropdown-menu">
+                <label className="filter-option all-option">
+                  <input 
+                    type="checkbox" 
+                    checked={isAllSelected}
+                    onChange={() => toggleType('all')}
+                  />
+                  <span>All Events</span>
+                </label>
+                <div className="filter-divider" />
+                {Object.entries(EVENT_TYPE_CATEGORIES).map(([category, types]) => (
+                  <div key={category} className="filter-category">
+                    <div className="filter-category-label">{category}</div>
+                    {types.map(type => (
+                      <label key={type} className="filter-option">
+                        <input 
+                          type="checkbox" 
+                          checked={isAllSelected || selectedTypes.has(type)}
+                          onChange={() => toggleType(type)}
+                        />
+                        <span>{EVENT_TYPE_LABELS[type]}</span>
+                      </label>
+                    ))}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
           <button className="refresh-btn" onClick={() => refetch()} title="Refresh">
             ↻
           </button>
@@ -129,8 +249,8 @@ export function ActivityLog() {
       </div>
 
       {/* Compact Event Table */}
-      <div className="activity-table">
-        {!events || events.length === 0 ? (
+      <div className="activity-table" onClick={() => filterOpen && setFilterOpen(false)}>
+        {!filteredEvents || filteredEvents.length === 0 ? (
           <div className="no-events">No activity events yet. Run the demo script to see logs.</div>
         ) : (
           <table>
@@ -144,7 +264,7 @@ export function ActivityLog() {
               </tr>
             </thead>
             <tbody>
-              {events
+              {filteredEvents
                 .filter(event => showA2ADetails || !A2A_VERBOSE_TYPES.includes(event.event_type))
                 .map((event, index) => {
                 const iconInfo = eventTypeIcons[event.event_type] || { icon: '•', class: 'icon-default' };
@@ -157,12 +277,22 @@ export function ActivityLog() {
                       </span>
                     </td>
                     <td className="col-actor">
-                      <span 
-                        className="actor-badge"
-                        style={{ backgroundColor: getActorColor(event.actor) }}
-                      >
-                        {event.actor}
-                      </span>
+                      {(() => {
+                        const displayActor = getDisplayActor(event);
+                        return (
+                          <span 
+                            className={`actor-badge ${displayActor.isTarget ? 'target-badge' : ''}`}
+                            style={{ 
+                              backgroundColor: displayActor.isTarget 
+                                ? getTargetColor(displayActor.label) 
+                                : getActorColor(event.actor) 
+                            }}
+                            title={displayActor.isTarget ? `Called by: ${event.actor}` : undefined}
+                          >
+                            {displayActor.label}
+                          </span>
+                        );
+                      })()}
                     </td>
                   <td className="col-action">
                     {event.event_type === 'agent_reasoning' && event.details?.reasoning ? (
@@ -174,11 +304,60 @@ export function ActivityLog() {
                     ) : event.event_type === 'a2a_message' && event.details?.message_preview ? (
                       <details className="a2a-message-details">
                         <summary className="a2a-message-summary">
-                          <strong>{event.details.direction === 'send' ? '→' : '←'} {event.details.to_agent}:</strong> 
+                          <strong>
+                            {event.details.from_agent} → {event.details.to_agent}:
+                          </strong> 
                           <span className="a2a-preview">{event.details.message_preview}</span>
                         </summary>
                         <div className="a2a-full-message">
                           {event.details.full_message || event.details.message_preview}
+                        </div>
+                      </details>
+                    ) : event.event_type === 'agent_thinking' && event.details?.thinking_preview ? (
+                      <details className="agent-thinking-details">
+                        <summary className="agent-thinking-summary">
+                          <span className="thinking-label">thinking</span>
+                          <span className="thinking-preview">{event.details.thinking_preview}</span>
+                        </summary>
+                        <div className="thinking-full">
+                          {event.details.full_thinking || event.details.thinking_preview}
+                        </div>
+                      </details>
+                    ) : event.event_type === 'npl_api' && event.details?.endpoint ? (
+                      <details className="npl-api-details">
+                        <summary className="npl-api-summary">
+                          <span className="api-caller-badge">{event.details.caller || 'unknown'}</span>
+                          {event.details.status_code && (
+                            <span className={`api-status-badge ${
+                              event.details.status_code >= 200 && event.details.status_code < 300 
+                                ? 'status-success' 
+                                : event.details.status_code >= 400 
+                                  ? 'status-error' 
+                                  : 'status-other'
+                            }`}>
+                              {event.details.status_code >= 200 && event.details.status_code < 300 ? '✓' : '✗'} {event.details.status_code}
+                            </span>
+                          )}
+                          <strong>{event.details.method || 'API'}</strong> {event.details.endpoint}
+                        </summary>
+                        <div className="npl-api-body">
+                          {event.details.request_body && (
+                            <div className="api-section">
+                              <strong>Request Body:</strong>
+                              <pre>{JSON.stringify(event.details.request_body, null, 2)}</pre>
+                            </div>
+                          )}
+                          {event.details.response_body && (
+                            <div className="api-section">
+                              <strong>Response Body:</strong>
+                              <pre>{JSON.stringify(event.details.response_body, null, 2)}</pre>
+                            </div>
+                          )}
+                          <div className="api-meta">
+                            {event.details.response_time_ms && (
+                              <span><strong>Time:</strong> {event.details.response_time_ms}ms</span>
+                            )}
+                          </div>
                         </div>
                       </details>
                     ) : (

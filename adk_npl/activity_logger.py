@@ -187,6 +187,9 @@ class ActivityLogger:
         status_code: Optional[int] = None,
         response_time: Optional[float] = None,
         error: Optional[str] = None,
+        request_body: Optional[dict] = None,
+        response_body: Optional[dict] = None,
+        caller: Optional[str] = None,
         **kwargs
     ):
         """Log an NPL Engine API call."""
@@ -196,10 +199,15 @@ class ActivityLogger:
             "status_code": status_code,
             "response_time_ms": round(response_time * 1000, 2) if response_time else None,
             "error": error,
+            "request_body": request_body,
+            "response_body": response_body,
+            "caller": caller,
             **kwargs
         }
         level = "error" if error else "info"
-        self.log_event("npl_api", "npl_engine", f"{method} {endpoint}", details, level)
+        # Use caller as actor so UI shows who made the API call (buyer_agent/supplier_agent)
+        actor = caller or "npl_engine"
+        self.log_event("npl_api", actor, f"{method} {endpoint}", details, level)
     
     def log_state_transition(
         self,
@@ -341,6 +349,29 @@ class ActivityLogger:
         }
         action = f"{'→' if direction == 'send' else '←'} {to_agent}" if direction == 'send' else f"{'←'} {from_agent}"
         self.log_event("a2a_message", from_agent, action, details, "info")
+    
+    def log_agent_thinking(
+        self,
+        agent_id: str,
+        thinking: str,
+        context: Optional[str] = None,
+        **kwargs
+    ):
+        """
+        Log agent's internal reasoning/thinking (not an A2A message).
+        
+        Args:
+            agent_id: The agent doing the thinking
+            thinking: The agent's reasoning text
+            context: Optional context (e.g., "a2a_response", "tool_decision")
+        """
+        details = {
+            "thinking_preview": thinking[:200] if thinking else None,
+            "full_thinking": thinking[:500] if thinking else None,
+            "context": context,
+            **kwargs
+        }
+        self.log_event("agent_thinking", agent_id, "💭 thinking", details, "debug")
     
     def get_recent_events(self, limit: int = 100) -> List[Dict[str, Any]]:
         """Get recent events from buffer."""

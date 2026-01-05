@@ -188,6 +188,7 @@ fix_protocol_mapper "supplier" "supplier" "department-mapper"
 echo ""
 echo "👤 Setting user attributes..."
 configure_user_attributes "purchasing" "purchasing_agent" "Acme Corp" "Procurement"
+configure_user_attributes "purchasing" "approver" "Acme Corp" "Management"
 configure_user_attributes "supplier" "supplier_agent" "Supplier Inc" "Sales"
 
 echo ""

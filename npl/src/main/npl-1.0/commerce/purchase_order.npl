@@ -5,6 +5,49 @@ use schemaorg.v1.QuantitativeValue;
 use commerce.Offer;
 
 /**
+ * Notification sent when a purchase order requires human approval.
+ * Orders >= $5000 require approval. The protocolId is the PurchaseOrder ID.
+ * @param orderNumber Human-readable order number
+ * @param total Order total in dollars (approval threshold is $5000)
+ * @param quantity Number of items ordered
+ */
+notification ApprovalRequiredNotification(orderNumber: Text, total: Number, quantity: Number) returns Unit;
+
+/**
+ * Notification sent to seller when a new purchase order is created.
+ * Seller should check the order and submit a quote.
+ * @param orderNumber Human-readable order number
+ * @param quantity Number of items ordered
+ * @param unitPrice Price per unit
+ * @param total Total order value
+ */
+notification OrderRequestedNotification(orderNumber: Text, quantity: Number, unitPrice: Number, total: Number) returns Unit;
+
+/**
+ * Notification sent to buyer when their order is approved.
+ * Buyer can now call placeOrder() to finalize.
+ * @param orderNumber Human-readable order number
+ * @param total Order total
+ */
+notification OrderApprovedNotification(orderNumber: Text, total: Number) returns Unit;
+
+/**
+ * Notification sent to buyer when their order ships.
+ * Buyer can track delivery and call closeOrder() when received.
+ * @param orderNumber Human-readable order number
+ * @param tracking Shipping tracking number
+ */
+notification OrderShippedNotification(orderNumber: Text, tracking: Text) returns Unit;
+
+/**
+ * Notification sent to seller when buyer places order (after quote/approval).
+ * Seller should prepare to ship.
+ * @param orderNumber Human-readable order number
+ * @param quantity Number of items to ship
+ */
+notification OrderPlacedNotification(orderNumber: Text, quantity: Number) returns Unit;
+
+/**
  * PurchaseOrder - Governed purchase order with approval workflow
  * 
  * Demonstrates how AI agents can participate in business workflows
@@ -63,7 +106,7 @@ protocol[buyer, seller, approver] PurchaseOrder(
      * Seller submits quote (price confirmation)
      * 
      * This action triggers automatic approval check:
-     * - If total >= $5,000 → ApprovalRequired state
+     * - If total >= $5,000 → ApprovalRequired state (notifies approver)
      * - If total < $5,000 → Quoted state (can proceed directly)
      */
     @api
@@ -72,11 +115,12 @@ protocol[buyer, seller, approver] PurchaseOrder(
         
         if (total >= APPROVAL_THRESHOLD) {
             approvalRequestedAt = optionalOf(now());
+            notify ApprovalRequiredNotification(orderNumber, total, quantity);
             become ApprovalRequired;
         } else {
             become Quoted;
         };
-    }
+    };
     
     /**
      * Human approver approves high-value order
@@ -87,8 +131,9 @@ protocol[buyer, seller, approver] PurchaseOrder(
     @api
     permission[approver] approve() | ApprovalRequired {
         approvedAt = optionalOf(now());
+        notify OrderApprovedNotification(orderNumber, total);
         become Approved;
-    }
+    };
     
     /**
      * Buyer agent attempts to place order
@@ -102,8 +147,9 @@ protocol[buyer, seller, approver] PurchaseOrder(
     @api
     permission[buyer] placeOrder() | Quoted, Approved {
         orderedAt = optionalOf(now());
+        notify OrderPlacedNotification(orderNumber, quantity);
         become Ordered;
-    }
+    };
     
     /**
      * Seller ships the order
@@ -113,8 +159,9 @@ protocol[buyer, seller, approver] PurchaseOrder(
         require(tracking.length() > 0, "Tracking number is required");
         trackingNumber = optionalOf(tracking);
         shippedAt = optionalOf(now());
+        notify OrderShippedNotification(orderNumber, tracking);
         become Shipped;
-    }
+    };
     
     /**
      * Close the order (buyer confirms receipt)
@@ -122,7 +169,7 @@ protocol[buyer, seller, approver] PurchaseOrder(
     @api
     permission[buyer] closeOrder() | Shipped {
         become Closed;
-    }
+    };
     
     /**
      * Cancel the order (both parties can cancel before shipping)
@@ -131,7 +178,7 @@ protocol[buyer, seller, approver] PurchaseOrder(
     permission[buyer | seller] cancelOrder(reason: Text) | Requested, Quoted, ApprovalRequired, Approved, Ordered {
         require(reason.length() > 0, "Cancellation reason is required");
         become Cancelled;
-    }
+    };
     
     /**
      * Get order summary with approval status
@@ -153,7 +200,7 @@ protocol[buyer, seller, approver] PurchaseOrder(
                " @ $" + unitPrice.toText() + 
                " | Total: $" + total.toText() + 
                " | " + approvalStatus;
-    }
+    };
     
     /**
      * Check if approval is required for this order
@@ -163,4 +210,3 @@ protocol[buyer, seller, approver] PurchaseOrder(
         return total >= APPROVAL_THRESHOLD;
     };
 };
-

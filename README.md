@@ -1,697 +1,301 @@
-# ADK Demo - Governed AI-Driven Supplier Ordering
+# ADK-NPL Demo: Autonomous Agents with NPL Governance
 
-**Proof of Concept:** AI agents participating in real business workflows with policy enforcement outside the LLM.
+A demonstration of AI agents conducting business transactions via the **A2A Protocol**, governed by **NPL (Noumena Protocol Language)** smart contracts.
 
-This project demonstrates how AI agents can autonomously initiate business transactions while being safely governed by NPL (Noumena Protocol Language), even when the AI is imperfect or unpredictable. The system enforces policies through state machines and role-based authorization, ensuring that **human approval is mandatory for high-value purchases** and all actions are auditable.
+## 🎯 What This Demo Shows
 
-## Key Features
+1. **Autonomous Agents**: Buyer and Supplier agents negotiate and transact independently
+2. **NPL Governance**: Business rules, state transitions, and authorization enforced by the NPL Engine
+3. **Smart NPL Bridge**: AI tools automatically enriched with contract semantics from NPL source code
+4. **A2A Communication**: Agents communicate via the Agent-to-Agent protocol
 
-- ✅ **LLM-Driven Workflow** - Agents use dynamically generated NPL tools via ADK Runners
-- ✅ **Policies Enforced Outside LLM** - NPL state machine blocks invalid transitions
-- ✅ **Human-in-the-Loop** - High-value orders require human approval before execution
-- ✅ **Fully Auditable** - Complete audit trail of all state transitions and approvals
-- ✅ **Safe by Design** - System remains correct even if LLM hallucinates or skips steps
-- ✅ **Transparent Agent Reasoning** - All LLM tool calls and responses are captured
-- ✅ **Resilient Error Handling** - Automatic retries with exponential backoff, token refresh
-- ✅ **Monitoring & Observability** - Metrics collection, structured logging, health checks
-- ✅ **Activity Logging** - Real-time tracking of agent reasoning, tool calls, and state transitions
-- ✅ **Protocol Memory** - Agents can track and recall protocol IDs across conversation turns
-- ✅ **HTTP-Based A2A** - True agent-to-agent communication using Google ADK's A2A protocol
-
-## Architecture
+## 🏗️ Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                        ADK Agents                                │
-│  ┌──────────────────┐              ┌──────────────────┐         │
-│  │ Purchasing Agent │              │  Supplier Agent  │         │
-│  │   (Acme Corp)    │              │  (Supplier Inc)  │         │
-│  └────────┬─────────┘              └────────┬─────────┘         │
-│           │                                  │                   │
-│           ▼                                  ▼                   │
-│  ┌──────────────────┐              ┌──────────────────┐         │
-│  │ Keycloak Realm:  │              │ Keycloak Realm:  │         │
-│  │   "purchasing"   │              │    "supplier"    │         │
-│  └────────┬─────────┘              └────────┬─────────┘         │
-│           │                                  │                   │
-│           └──────────────┬───────────────────┘                   │
-│                          ▼                                       │
-│           ┌──────────────────────────────┐                       │
-│           │        NPL Engine            │                       │
-│           │   (Trusts keycloak issuer)   │                       │
-│           │   schema.org commerce        │                       │
-│           │   protocols (Product,        │                       │
-│           │   Offer, PurchaseOrder)       │                       │
-│           └──────────────────────────────┘                       │
-└─────────────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────────────┐
+│                           Human Interfaces                               │
+│   [Buyer Chat] [Supplier Chat] [Approver Dashboard] [Activity Monitor]  │
+└────────────────────────────────┬────────────────────────────────────────┘
+                                 │
+┌────────────────────────────────▼────────────────────────────────────────┐
+│                          Chat API (8001)                                 │
+│                    FastAPI + ADK Agent Runners                           │
+└────────────────────────────────┬────────────────────────────────────────┘
+                                 │
+         ┌───────────────────────┼───────────────────────┐
+         ▼                       ▼                       ▼
+┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
+│  Buyer Agent    │◄──►│ Supplier Agent  │    │ Activity API    │
+│  (Purchasing)   │A2A │    (Sales)      │    │    (8002)       │
+└────────┬────────┘    └────────┬────────┘    └─────────────────┘
+         │                      │
+         │    Smart NPL Bridge  │
+         └──────────┬───────────┘
+                    ▼
+┌─────────────────────────────────────────────────────────────────────────┐
+│                        NPL Engine (12000)                                │
+│   Product → Offer → PurchaseOrder → Approval → Shipment                 │
+│   [Multi-party State] [Business Rules] [Authorization]                   │
+└────────────────────────────────┬────────────────────────────────────────┘
+                                 │
+┌────────────────────────────────▼────────────────────────────────────────┐
+│                        Keycloak (11000)                                  │
+│                    Identity & Party Claims                               │
+└─────────────────────────────────────────────────────────────────────────┘
 ```
 
-## Quick Start
+## 🚀 Quick Start
 
 ### Prerequisites
-
-- Python 3.10+
+- Python 3.10+ with virtual environment
 - Docker & Docker Compose
-- Google API Key (for Gemini)
+- Node.js 18+ (for frontend development)
+- Google API Key for Gemini 2.0 (`GOOGLE_API_KEY` in `.env`)
 
-### 1. Setup
-
+### 1. Start Infrastructure
 ```bash
-# Clone and enter directory
-cd adk-demo
-
-# Copy environment template
-cp .env.example .env
-
-# Edit .env and add your Google API key
-# GOOGLE_API_KEY="your-key-here"
-
-# Activate Python environment
-source .venv/bin/activate
-
-# Install all dependencies
-pip install -r requirements.txt
-```
-
-### 2. Start Services (Fresh)
-
-```bash
-# Complete clean start with all configuration
 ./scripts/setup-fresh.sh
 ```
+This starts: NPL Engine, Keycloak, PostgreSQL.
 
-### 3. Run ADK Web UI
+### 2. Start All Services (Recommended)
 
-We have provided a helper script to set up the environment correctly:
-
+**One Command - Starts Everything:**
 ```bash
-./run_adk.sh
+./start_demo.sh
 ```
 
-Access the UI at http://localhost:8000
+This single script will:
+- ✅ Check prerequisites (NPL Engine, Keycloak)
+- ✅ Start Activity API (port 8002)
+- ✅ Start Frontend (port 5173)
+- ✅ Start Chat API with A2A Agents (port 8001)
+  - Buyer A2A: http://localhost:8010
+  - Supplier A2A: http://localhost:8011
 
-### 4. Run NPL Approval Dashboard (NPL-Native Frontend)
+**All services run in the foreground** - you'll see terminal output from the Chat API. Press `Ctrl+C` to stop all services.
 
-The approval dashboard provides a human-friendly interface for approving high-value orders, using type-safe clients generated directly from NPL Engine's OpenAPI specifications:
+**Open the UI:** http://localhost:5173
 
+### Service Ports
+
+| Service | Port | URL | Description |
+|---------|------|-----|-------------|
+| Frontend | 5173 | http://localhost:5173 | React dashboard UI |
+| Chat API | 8001 | http://localhost:8001 | Main API with A2A agents |
+| Activity API | 8002 | http://localhost:8002 | Activity logs & metrics |
+| Buyer A2A | 8010 | http://localhost:8010 | Buyer agent A2A endpoint |
+| Supplier A2A | 8011 | http://localhost:8011 | Supplier agent A2A endpoint |
+| NPL Engine | 12000 | http://localhost:12000 | NPL protocol engine |
+| Keycloak | 11000 | http://localhost:11000 | Identity provider |
+
+### Alternative: Manual Start (Multiple Terminals)
+
+If you prefer to start services individually:
+
+**Terminal 1 - Activity API:**
 ```bash
-cd frontend
-npm install
-npm run dev
+cd activity_api && source ../.venv/bin/activate && ./run.sh
 ```
 
-Access at http://localhost:5173
-
-**Note:** On first run, you may need to add a hosts entry so your browser can resolve the `keycloak` hostname:
+**Terminal 2 - Frontend:**
 ```bash
-./setup_hosts.sh
+cd frontend && npm run dev
 ```
 
-**Key Features:**
-- ✅ **Type-safe API clients** - Auto-generated from NPL protocols
-- ✅ **Direct NPL integration** - No backend proxy needed
-- ✅ **Keycloak authentication** - Built-in auth handling with login/logout
-- ✅ **Light/Dark theme toggle** - Modern UI with theme switching
-- ✅ **Approval Dashboard** - Human-in-the-loop approval interface
-- ✅ **Pending approval notifications** - Visual badge alerts when approval is required
-- ✅ **Activity Log** - Real-time feed of all system events with expandable A2A messages
-- ✅ **Metrics Dashboard** - Performance metrics including LLM calls and A2A transfers
-- ✅ **Always in sync** - Regenerate types when protocols change
-
-**To regenerate types after protocol changes:**
+**Terminal 3 - Chat API & Agents:**
 ```bash
-cd frontend
-curl -s http://localhost:12000/npl/commerce/-/openapi.json > openapi/commerce-openapi.json
-npx openapi-typescript openapi/commerce-openapi.json -o ./src/clients/commerce/types.ts
+source .venv/bin/activate
+cd chat_api && uvicorn main:app --host 0.0.0.0 --port 8001
 ```
 
-### 5. Run Approval Workflow Demo
+**Production Build:**
+The built frontend is served from `frontend/dist/`.
 
-The main demo showcases the end-to-end approval workflow with **LLM agents driving the workflow** via dynamically generated NPL tools:
+## 👥 User Personas
 
-```bash
-python demo_approval_workflow.py
-```
+| Tab | Role | Actions |
+|-----|------|---------|
+| **Buyer** | Purchasing Agent | "Buy items on my shopping list" |
+| **Supplier** | Sales Agent | "Register my products" |
+| **Approvals** | Finance Approver | Approve high-value orders |
+| **Activity** | Observer | Monitor all A2A and NPL activity |
+| **Metrics** | Observer | View latency/call statistics |
 
-**How it works:**
-- Buyer and Supplier agents are ADK `LlmAgent` instances with NPL tools
-- Agents call `npl_commerce_*` tools (e.g., `npl_commerce_Product_create`) autonomously
-- All agent reasoning and tool calls are captured in the Activity Log
-- State verification ensures actions actually completed
-
-**Demo flow:**
-1. **Supplier agent** calls `npl_commerce_Product_create` tool → Product created
-2. **Supplier agent** calls `npl_commerce_Offer_create` + `publish` tools → Offer published
-3. **Buyer agent** calls `npl_commerce_Offer_accept` → Offer accepted
-4. **Buyer agent** calls `npl_commerce_PurchaseOrder_create` → High-value order triggers approval
-5. **Supplier agent** submits quote → State: `ApprovalRequired`
-6. **Buyer agent attempts** `placeOrder` → **BLOCKED by NPL** (ApprovalRequired state)
-7. **MANUAL STEP:** Human approves via UI:
-   - Open http://localhost:5173
-   - Log in as `approver` / `Welcome123` (realm: `purchasing`)
-   - Navigate to "APPROVALS" tab and click "APPROVE"
-   - Script detects approval and continues
-8. **Buyer agent retries** `placeOrder` → SUCCESS
-9. **Supplier agent** ships order → Complete audit trail
-
-**Alternative demos:**
-
-```bash
-# Basic orchestrated negotiation
-python simulate_negotiation.py
-
-# True A2A (Agent-to-Agent) with HTTP protocol
-python demo_a2a_workflow.py
-```
-
-### A2A Demo (`demo_a2a_workflow.py`)
-
-Demonstrates true agent-to-agent communication using Google ADK's A2A HTTP protocol:
-
-```
-┌─────────────────┐    A2A HTTP     ┌─────────────────┐
-│  Buyer Agent    │◄───────────────►│ Supplier Agent  │
-│  (Port 8010)    │                 │  (Port 8011)    │
-└────────┬────────┘                 └────────┬────────┘
-         │                                   │
-         └───────────► NPL Engine ◄──────────┘
-```
-
-**Key Features**:
-- Buyer and Supplier run as **separate HTTP servers**
-- Communication via **A2A protocol** (`transfer_to_agent` tool)
-- **Protocol Memory** - Agents remember offer IDs across A2A transfers
-- **Autonomous Agents** - Agents retry actions until NPL state allows
-- NPL governance enforced within A2A context
-- Human-in-the-loop approval for high-value orders
-
-**Demo Flow**:
-1. Supplier creates Product and Offer → publishes
-2. Buyer negotiates with Supplier via A2A (`transfer_to_agent`)
-3. Buyer accepts offer (uses `remember_protocol` to track ID)
-4. Buyer creates PurchaseOrder → high-value triggers approval
-5. Human approves via UI → NPL state transitions to `Approved`
-6. Buyer autonomously places order (retries until state allows)
-7. Supplier autonomously ships order
-
-*Note: These scripts run multiple LLM requests. If using a free tier Gemini API key, you may hit rate limits (429).*
-
-### 6. Activity Logging & Monitoring
-
-Track all agent actions, API calls, and state transitions in real-time:
-
-```bash
-# Start the Activity Feed API
-cd activity_api
-source ../.venv/bin/activate
-python3 main.py
-# API runs on http://localhost:8002
-
-# Run the demo (generates activity logs)
-cd ..
-python demo_approval_workflow.py
-
-# View logs in the UI
-cd frontend
-npm run dev
-# Open http://localhost:5173
-# Click "Activity Log" or "Metrics" tabs
-```
-
-**Features:**
-- 📝 **Activity Log** - Real-time feed of all system events (agent actions, API calls, state transitions)
-- 📊 **Metrics Dashboard** - Performance metrics, latency percentiles, error tracking
-- 🎯 **Auto-refresh** - Live updates without manual refresh
-- 📁 **JSON Log Files** - Structured logs saved to `logs/activity_*.json`
-- 🔍 **Filtering** - Filter by event type or actor
-
-**View logs directly:**
-```bash
-# View latest log file
-cat logs/activity_latest.json | jq
-
-# Watch logs in real-time
-tail -f logs/activity_latest.json | jq
-```
-
-See [ACTIVITY_LOGGING.md](ACTIVITY_LOGGING.md) for detailed documentation.
-
-### 7. Troubleshooting
-
-If you encounter **429 Resource Exhausted** errors with Gemini models:
-- Ensure `GOOGLE_CLOUD_PROJECT` is set in `.env` if using a paid billing account.
-- The agents are configured to use `gemini-flash-latest`. You can change this in `agents/purchasing/agent.py` and `agents/supplier/agent.py`.
-
-If you see **ModuleNotFoundError: No module named 'adk_npl'**:
-- Use the `./run_adk.sh` script which sets `PYTHONPATH` correctly.
-
-
-## Services
-
-| Service | Port | Description |
-|---------|------|-------------|
-| NPL Engine | 12000 | Protocol execution engine |
-| Keycloak | 11000 | Identity provider |
-| Activity API | 8002 | Activity logs and metrics REST API |
-| Frontend UI | 5173 | React approval dashboard (dev server) |
-| Engine DB | 5432 | PostgreSQL for NPL Engine |
-| Keycloak DB | 5439 | PostgreSQL for Keycloak |
-
-## Keycloak Realms
-
-### Purchasing Realm
-- **Realm**: `purchasing`
-- **Client**: `purchasing`
-- **Users**:
-  - `purchasing_agent` / `Welcome123` (Acme Corp, Procurement)
-  - `approver` / `Welcome123` (Acme Corp, Finance) - **Required for approval workflow**
-- **Organization**: Acme Corp
-
-### Supplier Realm
-- **Realm**: `supplier`
-- **Client**: `supplier`
-- **User**: `supplier_agent` / `Welcome123`
-- **Organization**: Supplier Inc
-- **Department**: Sales
-
-## Party Binding Strategy (NPL)
-
-This project uses **explicit party binding** with `@parties` at protocol creation:
-
-1. **At creation**: Pass all parties via `@parties` with their JWT claims:
-   ```json
-   {
-     "@parties": {
-       "seller": { "claims": { "organization": ["Supplier Inc"], "department": ["Sales"] } },
-       "buyer": { "claims": { "organization": ["Acme Corp"], "department": ["Procurement"] } }
-     }
-   }
-   ```
-
-2. **At action time**: The engine matches the caller's JWT claims against stored party claims.
-   - Caller's JWT must contain `organization` and `department` claims
-   - These are configured via `scripts/configure-user-profiles.sh`
-
-3. **No rules.yml**: The `rules.yml` file is empty - all party binding is explicit.
-
-4. **Observers**: Protocol parties automatically have read access. Add observers only for non-party readers.
-
-### Multi-Party Protocols (e.g., PurchaseOrder)
-
-For protocols with multiple parties (buyer, seller, approver), **LLM agents must be explicitly instructed** to pass all party parameters:
-
-```python
-# Example: PurchaseOrder requires 3 parties
-po_prompt = """
-Create a purchase order with these party parameters:
-- buyer_organization: "Acme Corp"
-- buyer_department: "Procurement"
-- seller_organization: "Supplier Inc"
-- seller_department: "Sales"
-- approver_organization: "Acme Corp"
-- approver_department: "Finance"
-"""
-```
-
-**Why this is necessary:**
-- NPL protocols don't expose party parameters in their OpenAPI spec
-- The ADK tool generator creates `*_organization` and `*_department` parameters for each party role
-- LLMs need explicit parameter names in their prompts to pass them correctly
-- Without all parties bound, agents from other realms will get 404 errors when trying to access the protocol
-
-## Project Structure
+## 📁 Project Structure
 
 ```
 adk-demo/
-├── adk_npl/                    # ADK-NPL integration library
-│   ├── config.py               # Configuration management
-│   ├── client.py               # NPL Engine client (with retry logic)
-│   ├── auth.py                 # Keycloak authentication (with token refresh)
-│   ├── discovery.py            # Package discovery from Swagger
-│   ├── tools.py                # Dynamic ADK tool generation
-│   ├── agent_builder.py        # Convenience agent creation
-│   ├── monitoring.py           # Metrics, logging, health checks
-│   ├── activity_logger.py      # Activity logging (JSON logs + in-memory buffer)
-│   ├── protocol_memory.py      # Protocol memory for tracking instances across turns
-│   ├── retry.py                # Retry utilities with exponential backoff
-│   └── utils.py                # Error classes and utilities
-│
-├── activity_api/               # Activity Feed REST API
-│   ├── main.py                 # FastAPI server for logs and metrics
-│   └── requirements.txt        # API dependencies
-│
-├── purchasing_agent/           # Purchasing agent (buyer side)
-│   └── agent.py                # ADK agent with business logic
-│
-├── supplier_agent/             # Supplier agent (seller side)
-│   └── agent.py                # ADK agent with sales logic
-│
-├── agents/                     # ADK Web UI agent wrappers
-│   ├── purchasing/agent.py     # Purchasing agent for adk web
-│   └── supplier/agent.py       # Supplier agent for adk web
-│
-├── tests/                      # Integration tests
-│   ├── conftest.py             # Shared pytest fixtures
-│   ├── test_utils.py           # Test utilities and helpers
-│   ├── test_commerce_product.py  # Product creation test
-│   ├── test_commerce_flow.py     # Full commerce flow test
-│   ├── test_error_handling.py    # Error handling and retry tests
-│   └── test_monitoring.py        # Monitoring and metrics tests
-│
-├── npl/                        # NPL source code
-│   └── src/main/
-│       ├── npl-1.0/            # Protocol definitions
-│       │   ├── commerce/       # Product, Offer, Order
-│       │   └── schemaorg/      # Schema.org types & enums
-│       └── yaml/               # Migration & rules (empty)
-│
-├── keycloak-provisioning/      # Terraform for Keycloak setup
-│   └── terraform.tf            # Realms, clients, users
-│
-├── frontend/                   # React + TypeScript UI
-│   ├── src/
-│   │   ├── components/         # React components
-│   │   │   ├── ApprovalDashboard.tsx  # Human approval interface
-│   │   │   ├── ActivityLog.tsx        # Activity log viewer
-│   │   │   └── MetricsDashboard.tsx   # Metrics and performance
-│   │   ├── contexts/           # Theme context
-│   │   └── clients/            # Type-safe NPL API clients
-│   └── openapi/                # OpenAPI specs for type generation
-│
-├── logs/                       # Activity log files (JSON)
-│   └── activity_*.json         # Timestamped activity logs
-│
-├── scripts/
-│   ├── setup-fresh.sh          # Complete clean setup
-│   ├── configure-user-profiles.sh  # Keycloak 26+ config
-│   └── wait-for-services.sh    # Health check utilities
-│
-├── setup_hosts.sh              # Helper script for keycloak hostname
-├── docker-compose.yml          # Service orchestration
-└── .env                        # Environment variables
+├── adk_npl/                 # Core library: Smart NPL Bridge
+│   ├── agent_factory.py     # Enterprise agent factory with ADK callbacks
+│   ├── tools.py             # NPL tool generation with semantic enrichment
+│   ├── client.py            # NPL Engine API client
+│   └── ...
+├── purchasing_agent/        # Buyer agent definition
+├── supplier_agent/          # Supplier agent definition
+├── chat_api/                # FastAPI server for human-agent interface
+├── activity_api/            # Activity logging API server
+├── frontend/                # React dashboard (TypeScript)
+├── npl/                     # NPL protocol source files
+│   └── src/main/npl-1.0/
+│       └── commerce/        # Product, Offer, PurchaseOrder protocols
+├── data/                    # Agent inventories
+│   ├── buyer_shopping_list.json
+│   └── supplier_inventory.json
+├── tests/                   # Test suite (35 tests total)
+├── scripts/                 # Setup and utility scripts
+└── docs/                    # Additional documentation
 ```
 
-## Agents
-
-### Purchasing Agent (Buyer)
-
-Autonomous procurement agent that:
-- Evaluates supplier offers
-- Negotiates within budget constraints
-- Creates purchase proposals
-- Records agreements using NPL protocols
-
-```python
-from purchasing_agent import create_purchasing_agent
-from adk_npl import NPLConfig
-
-config = NPLConfig(
-    engine_url="http://localhost:12000",
-    keycloak_url="http://localhost:11000",
-    keycloak_realm="purchasing",
-    keycloak_client_id="purchasing",
-    credentials={"username": "purchasing_agent", "password": "Welcome123"}
-)
-
-agent = await create_purchasing_agent(
-    config=config,
-    agent_id="buyer_001",
-    budget=50000.0,
-    requirements="Procurement of services"
-)
-```
-
-### Supplier Agent (Seller)
-
-Autonomous sales agent that:
-- Evaluates purchase requests
-- Creates competitive offers
-- Negotiates for better margins
-- Manages inventory and capacity
-
-```python
-from supplier_agent import create_supplier_agent
-from adk_npl import NPLConfig
-
-config = NPLConfig(
-    engine_url="http://localhost:12000",
-    keycloak_url="http://localhost:11000",
-    keycloak_realm="supplier",
-    keycloak_client_id="supplier",
-    credentials={"username": "supplier_agent", "password": "Welcome123"}
-)
-
-agent = await create_supplier_agent(
-    config=config,
-    agent_id="supplier_001",
-    min_price=15.0,
-    inventory={"widgets": 5000},
-    capacity={"max_quantity": 10000}
-)
-```
-
-### Agent Capabilities
-
-Both agents have:
-- **NPL Protocol Tools** - Dynamically discovered from the engine (protocol-agnostic)
-- **Business Tools** - Domain-specific logic (purchasing vs. supplier)
-- **Generic Instructions** - Work with any NPL protocols deployed
-
-### Key Features
-
-- **Schema-Aware Tool Generation**: Generates ADK tools with explicit typed parameters from OpenAPI schemas
-- **Dynamic Discovery**: Automatically discovers NPL packages from Swagger UI
-- **Self-Documenting Tools**: LLMs see exact parameter signatures (not opaque `**kwargs`)
-- **Multi-Realm Auth**: Supports federated identity with multiple Keycloak realms
-- **Caching**: Efficient caching of discovered packages and tools
-- **Resilient Error Handling**: Automatic retries with exponential backoff, token refresh on expiry
-- **Monitoring & Observability**: Built-in metrics collection, structured logging, health checks
-- **Production Ready**: Comprehensive error handling, retry logic, and observability tools
-
-## Approval Workflow Demo
-
-The `demo_approval_workflow.py` script demonstrates **LLM agents driving a complete business workflow** with NPL governance:
-
-### Architecture
-
-```
-┌─────────────────┐     ADK Runner      ┌─────────────────┐
-│  Buyer Agent    │◄──────────────────►│  NPL Engine     │
-│  (LlmAgent)     │  npl_commerce_*    │  (State Machine)│
-└─────────────────┘     tools           └─────────────────┘
-         │                                       │
-         │                                       │
-         ▼                                       ▼
-┌─────────────────┐                    ┌─────────────────┐
-│ Activity Logger │                    │  Human Approver │
-│ (reasoning +    │                    │  (via UI)       │
-│  tool calls)    │                    └─────────────────┘
-└─────────────────┘
-```
-
-### Flow
-
-1. **Supplier Agent** calls `npl_commerce_Product_create` → Product created
-2. **Supplier Agent** calls `npl_commerce_Offer_create`, `publish` → Offer published  
-3. **Buyer Agent** calls `npl_commerce_Offer_accept` → Offer accepted
-4. **Buyer Agent** calls `npl_commerce_PurchaseOrder_create` → PurchaseOrder ($12,000)
-5. **Supplier Agent** calls `submitQuote` → State: `ApprovalRequired`
-6. **Buyer Agent** calls `placeOrder` → **❌ NPL BLOCKS** (wrong state)
-7. **Human Approver** approves via UI → State: `Approved`
-8. **Buyer Agent** calls `placeOrder` → **✅ SUCCESS** → State: `Ordered`
-9. **Supplier Agent** calls `shipOrder` → Complete
-
-### What Makes This Special
-
-- **Agents call NPL tools directly** - No hardcoded API calls in the script
-- **Full transparency** - All agent reasoning and tool calls captured in Activity Log
-- **State verification** - Each action verified against NPL state machine
-- **LLM suggests, NPL decides** - Agent cannot bypass policy
-- **Resilience** - Works even if LLM hallucinates or skips steps
-
-## NPL Protocols
-
-The demo uses schema.org-inspired commerce protocols with an approval workflow:
-
-- **`commerce.Product`** - Product catalog entries (seller creates)
-- **`commerce.Offer`** - Price offers with terms (seller creates, buyer accepts)
-- **`commerce.PurchaseOrder`** - Purchase orders with approval workflow (buyer creates after accepting offer)
-
-### PurchaseOrder Approval Workflow
-
-The `PurchaseOrder` protocol implements human-in-the-loop approval for high-value purchases:
-
-**State Machine:**
-```
-Requested → Quoted → ApprovalRequired → Approved → Ordered → Shipped → Closed
-                   ↘ (if < $5000) ↗
-```
-
-**Key Rules:**
-- Orders **≥ $5,000** require approval by a user with `approver` role
-- `placeOrder` action is **blocked** unless:
-  - Quote exists
-  - Approval exists (if required)
-- All state transitions and approvals are **auditable**
-
-**Schema.org Types:**
-Supporting types in `schemaorg/`:
-- `PriceSpecification`, `QuantitativeValue`, `MonetaryAmount`
-- `PostalAddress`, `ContactPoint`, `DeliveryTimeSettings`
-- `OrderStatus`, `ItemCondition`, `OfferStatus`, `ProductStatus` (enums)
-
-## Development
-
-### Add a New Agent
-
-1. Create agent directory: `mkdir my_agent`
-2. Define agent in `my_agent/agent.py`
-3. Configure realm/user in Keycloak (or reuse existing)
-4. Test with adk_npl library
-
-### Modify NPL Protocols
-
-1. Edit files in `npl/src/main/npl-1.0/`
-2. Update `npl/src/main/yaml/migration.yml` if needed
-3. Restart engine: `docker-compose restart engine`
-
-### Update Keycloak Config
-
-1. Edit `keycloak-provisioning/terraform.tf`
-2. Rebuild: `docker-compose up -d --build keycloak-provisioning`
-3. Run user profile config: `./scripts/configure-user-profiles.sh`
-
-## Troubleshooting
-
-### JWKS Authentication Issues
-
-If you encounter `Failed to retrieve JWKS for http://localhost:11000/realms/...` errors, this is because the Engine (running in Docker) cannot reach `localhost:11000` from inside the container.
-
-**Solution:** The Python authentication client automatically rewrites the `Host` header to `keycloak:11000` when connecting to `localhost:11000`. This makes Keycloak issue tokens with the `keycloak:11000` issuer, which the Engine can reach via the Docker network. This fix is implemented in `adk_npl/auth.py` and works automatically.
-
-**Note:** The Engine doesn't support `ENGINE_ISSUER_JWKS_URL_OVERRIDES` in the current version, so Host header rewriting is the recommended workaround.
-
-### Token Claims Missing (organization, department)
-
-Keycloak 26+ requires explicit User Profile configuration:
-```bash
-./scripts/configure-user-profiles.sh
-```
-
-### 503 Service Unavailable
-
-JWT key cache issue - restart engine:
-```bash
-docker-compose restart engine
-```
-
-### Full Reset
-
-```bash
-docker-compose down -v
-./scripts/setup-fresh.sh
-```
-
-## Error Handling & Resilience
-
-The ADK-NPL integration includes robust error handling:
-
-- **Automatic Retries**: Transient failures (5xx, 429, network errors) are automatically retried with exponential backoff
-- **Token Refresh**: Expired JWT tokens are automatically refreshed using refresh tokens
-- **Detailed Error Messages**: Errors include status codes, URLs, and response bodies for debugging
-- **Configurable Timeouts**: Set request timeouts per client instance
-- **Graceful Degradation**: Connection errors and timeouts are handled gracefully
-
-### Example: Using Retry Logic
-
-```python
-from adk_npl import NPLClient
-
-# Client with custom retry configuration
-client = NPLClient(
-    base_url="http://localhost:12000",
-    auth_token="token",
-    max_retries=3,        # Retry up to 3 times
-    timeout=30.0          # 30 second timeout
-)
-
-# Automatic retries on transient failures
-try:
-    result = client.create_protocol(...)
-except NPLClientError as e:
-    # Detailed error information available
-    print(f"Error: {e.message}")
-    print(f"Status: {e.status_code}")
-    print(f"URL: {e.url}")
-```
-
-## Monitoring & Observability
-
-Built-in monitoring tools for production use:
-
-- **Metrics Collection**: Automatic tracking of API calls, latency, errors
-- **Structured Logging**: Optional JSON-formatted logs for log aggregation systems
-- **Health Checks**: Utilities to check NPL Engine health and authentication status
-
-### Example: Using Metrics
-
-```python
-from adk_npl import get_metrics, HealthCheck, NPLClient
-
-# Get metrics summary
-metrics = get_metrics()
-summary = metrics.get_summary()
-print(f"API calls: {summary['counters']}")
-print(f"Recent errors: {summary['recent_errors']}")
-
-# Check system health
-client = NPLClient(base_url="http://localhost:12000")
-health = HealthCheck(client).get_full_health()
-print(f"Engine status: {health['engine']['status']}")
-print(f"Auth status: {health['authentication']['status']}")
-```
-
-### Example: Structured Logging
-
-```python
-from adk_npl import StructuredLogger
-
-# JSON-formatted logging for log aggregation
-logger = StructuredLogger("my_app", use_json=True)
-logger.info("API call completed", endpoint="/npl/commerce/Product", latency=0.123)
-```
-
-## Testing
-
-Comprehensive test suite covering:
-
-- **Error Handling**: Retry logic, token refresh, error messages, graceful degradation
-- **Monitoring**: Metrics collection, structured logging, health checks
-- **Integration Tests**: Full commerce workflow tests
-
-### Running Tests
+## 🧪 Testing
 
 ```bash
 # Run all tests
-pytest tests/
+./run_tests.sh
 
-# Run specific test suites
-pytest tests/test_error_handling.py -v
+# Or with pytest
+pytest tests/test_npl_integration.py tests/test_agent_core.py tests/test_monitoring.py -v
+
+# Quick NPL-only tests
+pytest tests/test_npl_integration.py -v
+
+# Monitoring tests
 pytest tests/test_monitoring.py -v
-
-# Run integration tests (requires running services)
-pytest tests/ -m integration -v
 ```
 
-## Documentation
+### Test Coverage (35 tests total)
+- **12 NPL Integration Tests**: Authentication, OpenAPI, tool generation, protocol creation
+- **5 Agent Core Tests**: Agent creation, tool loading, execution
+- **18 Monitoring Tests**: Metrics collection, structured logging, health checks, telemetry
 
-Additional documentation is available in the `docs/` folder:
+## 🔧 Key Components
 
-- **[Why ADK-NPL?](docs/MOTIVATION.md)** - Motivation and use cases for the integration
-- [Agent Architecture](docs/AGENTS.md) - Detailed agent design and hybrid tool architecture
-- [A2A Communication](docs/A2A_COMMUNICATION.md) - Agent-to-agent interaction patterns
-- [ADK Monitoring](docs/MONITORING.md) - Web UI, CLI, and API monitoring tools
+### NPL-Assisted Active Agent Architecture
+
+**The Problem**: After extensive development, we discovered that LLM agents cannot reliably infer workflow state from conversation context alone. Agents exhibited:
+- **Infinite loops**: Repeatedly creating duplicate protocols
+- **Amnesia**: Starting each turn as if conversation was new
+- **State confusion**: Attempting invalid actions (e.g., "publish" already-published offers)
+- **Ping-pong A2A**: Endless back-and-forth without progress
+- **Tool spam**: 50+ tool calls per turn without meaningful results
+
+**What We Tried** (and why it failed):
+- ❌ **Prompt engineering**: LLMs don't reliably follow complex procedural instructions
+- ❌ **Tool call limits**: Prevents runaway execution but doesn't guide behavior
+- ❌ **Protocol memory**: Agents had memory but didn't use it consistently
+- ❌ **ADK callbacks**: Good for enforcement, not for guidance
+- ❌ **Simplified instructions**: Still requires LLM to infer "what action?" from context
+
+**Root Cause**: LLMs are stateless, context gets noisy, and two agents inferring independently leads to inconsistent mental models. **NPL already has authoritative workflow state** - but agents weren't querying it.
+
+**The Solution**: **NPL-Assisted Active Agents** - Agents query NPL for state rather than inferring it.
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    ORIENT → DECIDE → ACT → STOP                             │
+│                                                                              │
+│  1. ORIENT: Query NPL for current state and valid actions                   │
+│     └─→ npl_*_next_actions() → "You can: accept, reject, counter"           │
+│     └─→ AUTHORITATIVE state from NPL Engine, not inferred from chat          │
+│                                                                              │
+│  2. DECIDE: Use judgment + A2A negotiation to choose action                 │
+│     └─→ Agent DECIDES what's BEST (NPL tells what's POSSIBLE)               │
+│     └─→ "Price is too high, I'll negotiate via A2A"                          │
+│                                                                              │
+│  3. ACT: Execute ONE action                                                 │
+│     └─→ NPL validates and blocks if invalid                                 │
+│     └─→ No more state confusion - NPL is the gatekeeper                     │
+│                                                                              │
+│  4. STOP: Let the other party respond                                       │
+│     └─→ Turn-based prevents ping-pong                                        │
+│     └─→ NPL notifications wake agent when it's their turn                   │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+**Key Principles:**
+1. **Agents are ACTIVE** - They pursue goals, make decisions, negotiate via A2A
+2. **NPL provides AWARENESS** - "What state are we in? What can I do?" (authoritative, not inferred)
+3. **A2A enables CONVERGENCE** - Natural language negotiation preserved
+4. **NPL prevents MISTAKES** - Invalid actions blocked automatically before execution
+
+**Key Takeaways:**
+- LLMs are not reliable state machines - give them authoritative state from external source
+- Prompt engineering has limits - keep prompts simple: "Query state, decide, act, stop"
+- External state machines are essential - NPL provides the "ground truth"
+- A2A is for negotiation, not state management - use A2A for convergence, NPL for state
+- Notifications enable reactive behavior - "It's your turn" is more reliable than "figure out whose turn it is"
+
+See [`docs/WHY_AGENTS_FAILED.md`](docs/WHY_AGENTS_FAILED.md) for the complete journey and detailed analysis.
+
+### Smart NPL Bridge
+Unlike standard OpenAPI integrations, this project uses a "Smart Bridge" that:
+- **Extracts business rules** from NPL `require` statements
+- **Maps state transitions** from NPL `become` statements  
+- **Provides state awareness** via `npl_*_next_actions()` tools
+- **Routes notifications** to inform agents when state changes
+- **Embeds semantics in tool docstrings** so agents understand contracts
+
+### ADK Callbacks & Telemetry
+Agents use Google ADK's callback system for:
+- `before_tool_callback`: Enforce tool call limits (max 15/turn), record metrics
+- `after_tool_callback`: Log tool completions, record latency metrics
+- `on_tool_error_callback`: Categorize and handle NPL errors with guidance, record error metrics
+- `on_model_error_callback`: Rate limit backoff with exponential backoff
+- **OpenTelemetry Integration**: Automatic tracing of LLM calls, tool invocations, and agent reasoning
+
+### Protocol Creation Principle
+A key design principle emerged: **Only the party at the START of the workflow sequence should instantiate a protocol**.
+
+For example, in the `Product → Offer → PurchaseOrder` sequence:
+- **Supplier creates Product** (seller is the only party, can act from initial state)
+- **Supplier creates Offer** (seller must publish from initial state, buyer joins later)
+- **Buyer creates PurchaseOrder** (buyer initiates the order after accepting an offer)
+
+This is enforced through:
+1. **Dynamic Role Detection**: The Smart Bridge analyzes which party has permissions to act from the protocol's `initial state`
+2. **Tool Docstring Guidance**: Each multi-party protocol creation tool includes "WHO CREATES THIS PROTOCOL?" guidance
+3. **Workflow Sequence Awareness**: Tools document dependencies (e.g., "Offer requires Product", "PurchaseOrder requires Offer")
+
+This prevents agents from creating protocols out of sequence or with incorrect party roles.
+
+### NPL vs ADK: Complementary Roles
+| Concern | NPL | ADK |
+|---------|-----|-----|
+| Workflow state | ✅ Authoritative source | ❌ Inferred (unreliable) |
+| Valid actions | ✅ State-based rules | ❌ Guessed from context |
+| Multi-party state | ✅ Shared, enforced | ❌ Agent-scoped |
+| Business rules | ✅ Enforced by engine | ❌ In prompts only |
+| Party authorization | ✅ Cryptographic claims | ❌ Trust-based |
+| Agent reasoning | ❌ | ✅ LLM-powered |
+| Negotiation | ❌ | ✅ A2A natural language |
+
+## 📊 Monitoring & Observability
+
+- **Activity Log**: Real-time trace of A2A messages, NPL calls, and agent thinking
+- **Metrics Dashboard**: Comprehensive metrics including:
+  - LLM API calls (by agent, latency)
+  - Agent tool calls (by agent, by tool, success rate)
+  - A2A messages (sent/received, roundtrip time, success rate)
+  - NPL notifications (received/processed, by type, processing time)
+  - NPL API calls (by action, latency)
+  - Error tracking
+- **ADK Telemetry**: OpenTelemetry integration for LLM calls, tool invocations, and agent reasoning
+- **Theme Toggle**: Dark/Light mode support
+
+### UI Controls
+
+- **↻ Restart Button**: Restarts the Chat API server (reloads agents, clears history)
+- **⏹ Stop Button**: Gracefully shuts down the Chat API server
+
+## 📚 Documentation
+
+- **`docs/WHY_AGENTS_FAILED.md`** - **Start here**: The journey from failing agents to NPL-assisted architecture
+- `docs/AGENTS.md` - Agent architecture and design principles
+- `docs/MONITORING.md` - Observability, metrics, and telemetry
+- `docs/A2A_COMMUNICATION.md` - Agent-to-Agent protocol details
+- `docs/MOTIVATION.md` - Project motivation and goals
+- `adk_npl/README.md` - Smart Bridge library documentation
 
 ## License
 
-MIT
+MIT License
