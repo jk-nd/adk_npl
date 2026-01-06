@@ -30,10 +30,17 @@ import './ApprovalDashboard.css';
 
 type PurchaseOrder = components['schemas']['PurchaseOrder'];
 
+// Extended type with dynamically fetched computed values
+type PurchaseOrderWithValues = PurchaseOrder & {
+  quantity?: number;
+  unitPrice?: number;
+  total?: number;
+};
+
 export default function ApprovalDashboard() {
   const { keycloak, initialized } = useKeycloak();
   const { theme, toggleTheme } = useTheme();
-  const [orders, setOrders] = useState<PurchaseOrder[]>([]);
+  const [orders, setOrders] = useState<PurchaseOrderWithValues[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -73,7 +80,6 @@ export default function ApprovalDashboard() {
       console.log('[ApprovalDashboard] Query response:', { 
         hasError: !!error, 
         itemCount: data?.items?.length || 0,
-        items: data?.items?.map((o: any) => ({ id: o['@id'], state: o['@state'], total: o.total }))
       });
       // #endregion
 
@@ -82,7 +88,40 @@ export default function ApprovalDashboard() {
         return;
       }
 
-      setOrders(data?.items || []);
+      // Fetch computed values (quantity, unitPrice, total) for each order
+      const ordersWithValues = await Promise.all(
+        (data?.items || []).map(async (order: any) => {
+          try {
+            // Call getter APIs for computed values
+            const [quantityRes, unitPriceRes, totalRes] = await Promise.all([
+              client.POST('/npl/commerce/PurchaseOrder/{id}/getQuantity', {
+                params: { path: { id: order['@id'] } },
+                headers: { 'X-Party': 'approver' },
+              }),
+              client.POST('/npl/commerce/PurchaseOrder/{id}/getUnitPrice', {
+                params: { path: { id: order['@id'] } },
+                headers: { 'X-Party': 'approver' },
+              }),
+              client.POST('/npl/commerce/PurchaseOrder/{id}/getTotal', {
+                params: { path: { id: order['@id'] } },
+                headers: { 'X-Party': 'approver' },
+              }),
+            ]);
+
+            return {
+              ...order,
+              quantity: quantityRes.data,
+              unitPrice: unitPriceRes.data,
+              total: totalRes.data,
+            };
+          } catch (err) {
+            console.error(`Failed to fetch values for order ${order['@id']}:`, err);
+            return order; // Return order without computed values if fetch fails
+          }
+        })
+      );
+
+      setOrders(ordersWithValues);
     } catch (err) {
       // #region agent log
       console.error('[ApprovalDashboard] Query error:', err);
@@ -334,11 +373,7 @@ export default function ApprovalDashboard() {
                       <div className="agent-cardTitle">PO {order.orderNumber || order['@id']}</div>
                       <div className="agent-cardSub">
                         <span className="agent-badge agent-badge--warning">{order['@state'] || 'ApprovalRequired'}</span>
-                        {order.quoteSubmittedAt ? (
-                          <span className="agent-muted">Quoted {new Date(order.quoteSubmittedAt).toLocaleString()}</span>
-                        ) : (
-                          <span className="agent-muted">Awaiting approval</span>
-                        )}
+                        <span className="agent-muted">Awaiting approval</span>
                       </div>
                     </div>
 

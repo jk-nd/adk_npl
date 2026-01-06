@@ -339,6 +339,15 @@ async def get_metrics_summary() -> Dict[str, Any]:
         npl_by_action = defaultdict(int)
         npl_latencies = []
         
+        # Notification metrics
+        notifications_total = 0
+        notifications_by_agent = defaultdict(int)
+        notifications_by_type = defaultdict(int)
+        
+        # Tool call metrics
+        tool_calls_total = 0
+        tool_calls_by_agent = defaultdict(int)
+        
         with open(log_file, 'r') as f:
             for line in f:
                 if not line.strip():
@@ -398,6 +407,34 @@ async def get_metrics_summary() -> Dict[str, Any]:
                         if 'npl_' in action:
                             npl_calls_total += 1
                             npl_by_action[action] += 1
+                    
+                    # Notification metrics
+                    if event_type == 'npl_notification':
+                        notifications_total += 1
+                        agent = details.get('agent', actor)
+                        notifications_by_agent[agent] += 1
+                        notif_type = details.get('notification_type', 'unknown')
+                        notifications_by_type[notif_type] += 1
+                    
+                    # Tool call metrics  
+                    if event_type == 'tool_call':
+                        tool_calls_total += 1
+                        agent = details.get('agent', actor)
+                        tool_calls_by_agent[agent] += 1
+                    
+                    # Notification metrics
+                    if event_type == 'npl_notification':
+                        notifications_total += 1
+                        agent = details.get('agent', actor)
+                        notifications_by_agent[agent] += 1
+                        notif_type = details.get('notification_type', 'unknown')
+                        notifications_by_type[notif_type] += 1
+                    
+                    # Tool call metrics
+                    if event_type == 'tool_call':
+                        tool_calls_total += 1
+                        agent = details.get('agent', actor)
+                        tool_calls_by_agent[agent] += 1
                     
                     # Track errors
                     if level in ['error', 'warning'] or details.get('outcome') == 'blocked_by_npl':
@@ -487,11 +524,30 @@ async def get_metrics_summary() -> Dict[str, Any]:
                 "avg_latency_ms": sum(npl_latencies) / len(npl_latencies) if npl_latencies else 0
             }
         
+        notifications = None
+        if notifications_total > 0:
+            notifications = {
+                "total_received": notifications_total,
+                "total_processed": notifications_total,  # Assume all received are processed
+                "by_agent": dict(notifications_by_agent),
+                "by_type": dict(notifications_by_type),
+                "success_rate": 1.0  # Default to 100%
+            }
+        
+        tool_calls = None
+        if tool_calls_total > 0:
+            tool_calls = {
+                "total": tool_calls_total,
+                "by_agent": dict(tool_calls_by_agent)
+            }
+        
         return {
             "counters": {k: dict(v) for k, v in counters.items()},
             "latencies": latency_stats,
             "recent_errors": recent_errors[-20:],  # Last 20 errors
             "llm_calls": llm_calls,
+            "tool_calls": tool_calls,
+            "notifications": notifications,
             "a2a_transfers": a2a_transfers,
             "npl_calls": npl_calls,
             "timestamp": datetime.now().isoformat()

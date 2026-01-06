@@ -1,11 +1,21 @@
 #!/bin/bash
 # Start the complete ADK-NPL demo with all services
 # This script runs everything in the foreground with terminal output
+#
+# Usage: 
+#   ./start_demo.sh          # Start with existing database
+#   ./start_demo.sh --clean  # Reset NPL database before starting
 
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
+
+# Parse arguments
+CLEAN_DB=false
+if [ "$1" = "--clean" ]; then
+    CLEAN_DB=true
+fi
 
 # Colors for output
 GREEN='\033[0;32m'
@@ -16,6 +26,9 @@ NC='\033[0m' # No Color
 
 echo -e "${BLUE}============================================================${NC}"
 echo -e "${BLUE}🚀 Starting ADK-NPL Demo - Complete System${NC}"
+if [ "$CLEAN_DB" = true ]; then
+    echo -e "${YELLOW}   (With clean database reset)${NC}"
+fi
 echo -e "${BLUE}============================================================${NC}"
 echo ""
 
@@ -38,6 +51,42 @@ if ! curl -s http://localhost:12000/health > /dev/null 2>&1; then
     exit 1
 fi
 echo -e "${GREEN}✅ NPL Engine is running${NC}"
+
+# Reset NPL engine database if --clean flag is set
+if [ "$CLEAN_DB" = true ]; then
+    echo ""
+    echo -e "${YELLOW}🗑️  Resetting NPL Engine database (keeping Keycloak)...${NC}"
+    
+    # Stop engine and database
+    echo -e "${YELLOW}   Stopping engine and database...${NC}"
+    docker-compose stop engine engine-db
+    
+    # Remove the named volume
+    echo -e "${YELLOW}   Removing engine database volume...${NC}"
+    docker volume rm -f adk-demo_engine-db 2>/dev/null || true
+    
+    # Restart database and engine with fresh volume
+    echo -e "${YELLOW}   Starting engine-db and engine with clean database...${NC}"
+    docker-compose up -d engine-db
+    sleep 5  # Give DB time to initialize
+    docker-compose up -d engine
+    
+    # Wait for health check
+    echo -n "   Waiting for NPL Engine"
+    for i in {1..60}; do
+        if curl -s http://localhost:12000/health > /dev/null 2>&1; then
+            echo ""
+            echo -e "${GREEN}✅ NPL Engine restarted with clean database${NC}"
+            break
+        fi
+        if [ $((i % 5)) -eq 0 ]; then
+            echo -n "."
+        fi
+        sleep 1
+    done
+    
+    echo ""
+fi
 echo ""
 
 # Check if Keycloak is running
@@ -73,7 +122,7 @@ trap cleanup SIGINT SIGTERM
 # Start Activity API in background (but capture output)
 echo -e "${BLUE}📊 Starting Activity API (port 8002)...${NC}"
 cd activity_api
-python main.py > ../logs/activity_api.log 2>&1 &
+python3 main.py > ../logs/activity_api.log 2>&1 &
 ACTIVITY_API_PID=$!
 cd ..
 sleep 2

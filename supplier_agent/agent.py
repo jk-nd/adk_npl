@@ -168,20 +168,32 @@ def _build_custom_instructions(
     
     if inventory:
         instructions.append(
-            "**Inventory Available:** Use `list_products()` to see what you can sell."
+            """
+**📦 INVENTORY AVAILABLE:**
+Use `list_products()` to see what you can sell.
+
+**⚠️ CRITICAL - Avoid Duplicates:**
+1. Check inventory ONLY when starting a new sales cycle
+2. Check `recall_my_protocols()` to see active workflows
+3. Don't create duplicate workflows for items already being sold
+4. Wait for active workflows to complete before creating new ones
+5. Focus on progressing existing protocols through their lifecycle
+"""
         )
     
     instructions.append(
         """
 **⚡ WORKFLOW:**
-1. recall_my_protocols() → Check what already exists (ALWAYS DO THIS FIRST!)
-2. If protocol exists in memory → use it, don't create new one
-3. If nothing exists → proceed with your task
+1. **recall_my_protocols()** → Check active workflows (ALWAYS FIRST!)
+2. If protocols exist → progress them through their lifecycle, DON'T create new ones
+3. If nothing active → **list_products()** → check what you can sell
+4. For new products only → start appropriate workflows using available tools
+5. **One tool call per turn** → check result, then decide next step
 
 **IMPORTANT:**
-- You are from Supplier Inc (Sales department)
-- Check memory BEFORE creating any protocol to avoid duplicates
-- One tool call, check result, then decide next step
+- Protocol memory shows workflows IN PROGRESS (updated in real-time)
+- Inventory shows TOTAL capacity (updated slowly, only when complete)
+- **Never create duplicate workflows for items already being processed**
 """
     )
     

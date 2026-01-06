@@ -45,12 +45,9 @@ interface MetricsSummary {
     avg_latency_ms: number;
   };
   // New metrics
-  agent_tool_calls?: {
+  tool_calls?: {
     total: number;
     by_agent: Record<string, number>;
-    by_tool: Record<string, number>;
-    avg_latency_ms: number;
-    success_rate: number;
   };
   notifications?: {
     total_received: number;
@@ -157,12 +154,7 @@ export function MetricsDashboard() {
           <div className="metric-icon">🔧</div>
           <div className="metric-content">
             <div className="metric-label">Agent Tool Calls</div>
-            <div className="metric-value">{metrics?.agent_tool_calls?.total || 0}</div>
-            {metrics?.agent_tool_calls?.success_rate !== undefined && (
-              <div className="metric-sublabel">
-                Success: {formatNumber(metrics.agent_tool_calls.success_rate * 100, 1)}%
-              </div>
-            )}
+            <div className="metric-value">{metrics?.tool_calls?.total || 0}</div>
           </div>
         </div>
         <div className="metric-card a2a">
@@ -230,43 +222,25 @@ export function MetricsDashboard() {
       )}
 
       {/* Agent Tool Calls */}
-      {metrics?.agent_tool_calls && (
+      {metrics?.tool_calls && metrics.tool_calls.total > 0 && (
         <div className="metrics-section">
           <details open className="section-details">
             <summary className="section-summary">
               <h3>🔧 Agent Tool Calls</h3>
               <span className="section-subtitle">
-                {metrics.agent_tool_calls.total} calls · 
-                {metrics.agent_tool_calls.avg_latency_ms && ` Avg ${formatDuration(metrics.agent_tool_calls.avg_latency_ms)} · `}
-                Success {formatNumber((metrics.agent_tool_calls.success_rate || 0) * 100, 1)}%
+                {metrics.tool_calls.total} calls
               </span>
             </summary>
-            {metrics.agent_tool_calls.by_agent && Object.keys(metrics.agent_tool_calls.by_agent).length > 0 && (
+            {metrics.tool_calls.by_agent && Object.keys(metrics.tool_calls.by_agent).length > 0 && (
               <>
                 <h4 className="subsection-title">By Agent</h4>
                 <div className="breakdown-grid">
-                  {Object.entries(metrics.agent_tool_calls.by_agent).map(([agent, count]) => (
+                  {Object.entries(metrics.tool_calls.by_agent).map(([agent, count]) => (
                     <div key={agent} className="breakdown-item">
                       <span className="breakdown-label">{agent}</span>
                       <span className="breakdown-value">{count}</span>
                     </div>
                   ))}
-                </div>
-              </>
-            )}
-            {metrics.agent_tool_calls.by_tool && Object.keys(metrics.agent_tool_calls.by_tool).length > 0 && (
-              <>
-                <h4 className="subsection-title">By Tool</h4>
-                <div className="breakdown-grid">
-                  {Object.entries(metrics.agent_tool_calls.by_tool)
-                    .sort(([, a], [, b]) => b - a)
-                    .slice(0, 10)
-                    .map(([tool, count]) => (
-                      <div key={tool} className="breakdown-item">
-                        <span className="breakdown-label">{tool}</span>
-                        <span className="breakdown-value">{count}</span>
-                      </div>
-                    ))}
                 </div>
               </>
             )}

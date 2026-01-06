@@ -13,7 +13,7 @@ echo "   ✅ Stopped"
 # Step 2: Wipe volumes
 echo ""
 echo "2️⃣  Removing old data..."
-docker volume rm -f adk-demo_keycloak-db adk-demo_keycloak-provisioning 2>/dev/null || true
+docker volume rm -f adk-demo_engine-db adk-demo_keycloak-db adk-demo_keycloak-provisioning 2>/dev/null || true
 echo "   ✅ Volumes removed"
 
 # Step 3: Verify password in .env

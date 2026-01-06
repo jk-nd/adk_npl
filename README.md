@@ -62,11 +62,15 @@ This starts: NPL Engine, Keycloak, PostgreSQL.
 
 **One Command - Starts Everything:**
 ```bash
-./start_demo.sh
+./start_demo.sh          # Start with existing database
+./start_demo.sh --clean  # Reset NPL engine database (fresh session)
 ```
+
+⚠️ **Use `--clean` for a truly fresh session**: This resets the NPL engine database, clearing all protocols from previous runs. Keycloak users remain unchanged. Without `--clean`, agents may reference old Product/Offer/PurchaseOrder instances.
 
 This single script will:
 - ✅ Check prerequisites (NPL Engine, Keycloak)
+- ✅ Optionally reset NPL database (`--clean` flag)
 - ✅ Start Activity API (port 8002)
 - ✅ Start Frontend (port 5173)
 - ✅ Start Chat API with A2A Agents (port 8001)

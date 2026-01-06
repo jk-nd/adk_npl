@@ -7,21 +7,12 @@ use commerce.Offer;
 /**
  * Notification sent when a purchase order requires human approval.
  * Orders >= $5000 require approval. The protocolId is the PurchaseOrder ID.
+ * This is sent automatically in the init block based on order total.
  * @param orderNumber Human-readable order number
  * @param total Order total in dollars (approval threshold is $5000)
  * @param quantity Number of items ordered
  */
 notification ApprovalRequiredNotification(orderNumber: Text, total: Number, quantity: Number) returns Unit;
-
-/**
- * Notification sent to seller when a new purchase order is created.
- * Seller should check the order and submit a quote.
- * @param orderNumber Human-readable order number
- * @param quantity Number of items ordered
- * @param unitPrice Price per unit
- * @param total Total order value
- */
-notification OrderRequestedNotification(orderNumber: Text, quantity: Number, unitPrice: Number, total: Number) returns Unit;
 
 /**
  * Notification sent to buyer when their order is approved.
@@ -54,32 +45,42 @@ notification OrderPlacedNotification(orderNumber: Text, quantity: Number) return
  * while being safely governed by NPL protocol rules.
  * 
  * Key features:
- * - Orders above $5,000 require human approval
+ * - Price and quantity automatically computed from accepted Offer (single source of truth)
+ * - Orders above $5,000 require human approval (auto-routed in submit)
  * - Only users with 'approver' role can approve
  * - Agents cannot bypass approval requirements
  * - All actions are auditable
  * 
+ * Workflow:
+ * 1. Agent accepts an Offer (price + quantity locked in Offer protocol)
+ * 2. Agent creates PurchaseOrder with only orderNumber + acceptedOffer
+ * 3. Buyer calls submit() → auto-routes to ApprovalRequired or Quoted
+ * 4. [If needed] Human approves → Approved
+ * 5. Buyer places order → Ordered
+ * 6. Supplier ships → Shipped
+ * 7. Buyer closes → Closed
+ * 
+ * Note: quantity, unitPrice, and total are computed functions (not constructor params).
+ * They're derived from the acceptedOffer and exposed via @api permissions.
+ * This ensures the Offer is the single source of truth for pricing.
+ * 
  * Example Usage:
  *   PurchaseOrder(
  *       orderNumber = "PO-2024-001",
- *       acceptedOffer = offerProtocol,
- *       quantity = 100,
- *       unitPrice = 45.0,
- *       total = 4500.0
+ *       acceptedOffer = offerProtocol
  *   )
  */
 @api
 protocol[buyer, seller, approver] PurchaseOrder(
     var orderNumber: Text,
-    var acceptedOffer: Offer,
-    var quantity: Number,
-    var unitPrice: Number,
-    var total: Number
+    var acceptedOffer: Offer
 ) {
     require(orderNumber.length() > 0, "Order number is required");
-    require(quantity > 0, "Quantity must be positive");
-    require(unitPrice > 0, "Unit price must be positive");
-    require(total > 0, "Total must be positive");
+    
+    // Computed values derived from accepted offer (single source of truth)
+    function quantity() returns Number -> acceptedOffer.availableQuantity.value;
+    function unitPrice() returns Number -> acceptedOffer.priceSpecification.price;
+    function total() returns Number -> quantity() * unitPrice();
     
     // Approval threshold constant - orders >= $5,000 require approval
     var APPROVAL_THRESHOLD: Number = 5000.0;
@@ -95,27 +96,24 @@ protocol[buyer, seller, approver] PurchaseOrder(
     final state Cancelled;
     
     // Internal state tracking
-    var quoteSubmittedAt: Optional<DateTime> = optionalOf<DateTime>();
-    var approvalRequestedAt: Optional<DateTime> = optionalOf<DateTime>();
     var approvedAt: Optional<DateTime> = optionalOf<DateTime>();
     var orderedAt: Optional<DateTime> = optionalOf<DateTime>();
     var shippedAt: Optional<DateTime> = optionalOf<DateTime>();
     var trackingNumber: Optional<Text> = optionalOf<Text>();
     
     /**
-     * Seller submits quote (price confirmation)
+     * Buyer submits the purchase order for processing
      * 
-     * This action triggers automatic approval check:
+     * This auto-routes based on total amount:
      * - If total >= $5,000 → ApprovalRequired state (notifies approver)
      * - If total < $5,000 → Quoted state (can proceed directly)
+     * 
+     * The price comes from the accepted Offer, so no re-negotiation needed.
      */
     @api
-    permission[seller] submitQuote() | Requested {
-        quoteSubmittedAt = optionalOf(now());
-        
-        if (total >= APPROVAL_THRESHOLD) {
-            approvalRequestedAt = optionalOf(now());
-            notify ApprovalRequiredNotification(orderNumber, total, quantity);
+    permission[buyer] submit() | Requested {
+        if (total() >= APPROVAL_THRESHOLD) {
+            notify ApprovalRequiredNotification(orderNumber, total(), quantity());
             become ApprovalRequired;
         } else {
             become Quoted;
@@ -131,7 +129,7 @@ protocol[buyer, seller, approver] PurchaseOrder(
     @api
     permission[approver] approve() | ApprovalRequired {
         approvedAt = optionalOf(now());
-        notify OrderApprovedNotification(orderNumber, total);
+        notify OrderApprovedNotification(orderNumber, total());
         become Approved;
     };
     
@@ -147,7 +145,7 @@ protocol[buyer, seller, approver] PurchaseOrder(
     @api
     permission[buyer] placeOrder() | Quoted, Approved {
         orderedAt = optionalOf(now());
-        notify OrderPlacedNotification(orderNumber, quantity);
+        notify OrderPlacedNotification(orderNumber, quantity());
         become Ordered;
     };
     
@@ -185,7 +183,7 @@ protocol[buyer, seller, approver] PurchaseOrder(
      */
     @api
     permission[buyer | seller | approver] getOrderSummary() returns Text {
-        var approvalStatus = if (total >= APPROVAL_THRESHOLD) {
+        var approvalStatus = if (total() >= APPROVAL_THRESHOLD) {
             if (approvedAt.isPresent()) {
                 "Approved"
             } else {
@@ -196,9 +194,9 @@ protocol[buyer, seller, approver] PurchaseOrder(
         };
         
         return "PO " + orderNumber + 
-               " | Qty: " + quantity.toText() + 
-               " @ $" + unitPrice.toText() + 
-               " | Total: $" + total.toText() + 
+               " | Qty: " + quantity().toText() + 
+               " @ $" + unitPrice().toText() + 
+               " | Total: $" + total().toText() + 
                " | " + approvalStatus;
     };
     
@@ -207,6 +205,38 @@ protocol[buyer, seller, approver] PurchaseOrder(
      */
     @api
     permission[buyer | seller | approver] requiresApproval() returns Boolean {
-        return total >= APPROVAL_THRESHOLD;
+        return total() >= APPROVAL_THRESHOLD;
+    };
+    
+    /**
+     * Get the accepted offer details
+     */
+    @api
+    permission[buyer | seller | approver] getAcceptedOffer() returns Offer {
+        return acceptedOffer;
+    };
+    
+    /**
+     * Get the order quantity (computed from accepted offer)
+     */
+    @api
+    permission[buyer | seller | approver] getQuantity() returns Number {
+        return quantity();
+    };
+    
+    /**
+     * Get the unit price (computed from accepted offer)
+     */
+    @api
+    permission[buyer | seller | approver] getUnitPrice() returns Number {
+        return unitPrice();
+    };
+    
+    /**
+     * Get the total amount (computed from quantity × unit price)
+     */
+    @api
+    permission[buyer | seller | approver] getTotal() returns Number {
+        return total();
     };
 };

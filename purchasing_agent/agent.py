@@ -168,20 +168,32 @@ def _build_custom_instructions(
     
     if shopping_list:
         instructions.append(
-            "**Shopping List Available:** Use `list_shopping_items()` to see what you need to purchase."
+            """
+**📋 SHOPPING LIST AVAILABLE:**
+Use `list_shopping_items()` to see what you need to purchase.
+
+**⚠️ CRITICAL - Avoid Duplicates:**
+1. Check shopping list ONLY when starting a new procurement cycle
+2. Check `recall_my_protocols()` to see active workflows
+3. Calculate: needed_quantity - (in_progress_quantity) = remaining_to_order
+4. Only start new workflows if remaining_to_order > 0
+5. Wait for active workflows to complete before checking shopping list again
+"""
         )
     
     instructions.append(
         """
 **⚡ WORKFLOW:**
-1. recall_my_protocols() → Check what already exists (ALWAYS DO THIS FIRST!)
-2. If protocol exists in memory → use it, don't create new one
-3. If nothing exists → proceed with your task
+1. **recall_my_protocols()** → Check active workflows (ALWAYS FIRST!)
+2. If protocols exist → progress them through their lifecycle, DON'T create new ones
+3. If nothing in progress → **list_shopping_items()** → check what you need
+4. For new items only → start appropriate workflows using available tools
+5. **One tool call per turn** → check result, then decide next step
 
 **IMPORTANT:**
-- You are from Acme Corp (Procurement department)
-- Check memory BEFORE creating any protocol to avoid duplicates
-- One tool call, check result, then decide next step
+- Protocol memory shows workflows IN PROGRESS (updated in real-time)
+- Shopping list shows TOTAL business need (updated slowly, only when complete)
+- **Never create duplicate workflows for items already being processed**
 """
     )
     

@@ -1258,7 +1258,11 @@ async def restart_session():
     processed_notification_ids.clear()
     last_notification_time.clear()
     
-    logger.info("✅ Agent state cleared")
+    # Clear protocol memory (singleton instances that persist across restarts)
+    from adk_npl.protocol_memory import NPLProtocolMemory
+    NPLProtocolMemory.clear_all()
+    
+    logger.info("✅ Agent state and protocol memory cleared")
     
     # Get the command to restart
     python_exe = sys.executable
