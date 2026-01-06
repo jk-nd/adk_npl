@@ -170,11 +170,11 @@ View in the Activity Log tab of the dashboard.
 
 ### Programmatic Test
 
-```python
+```bash
 # Start demo
-python demo_inventory_chat.py
+./start_demo.sh
 
-# Send message via API
+# Send message via API (in another terminal)
 curl -X POST http://localhost:8001/chat/buyer \
   -H "Content-Type: application/json" \
   -d '{"message": "Send a message to the supplier asking about products"}'

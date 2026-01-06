@@ -1,21 +1,17 @@
 """
-Dynamic tool generation from NPL Engine OpenAPI specs (Smart NPL Bridge).
+Copyright 2025 Noumena Digital AG
 
-This module implements the "Smart NPL Bridge" - a semantic layer that enriches
-tools with goal-oriented descriptions, business rules, and workflow guidance.
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
 
-Key Features:
-- Parses NPL source files to extract workflow, states, and party permissions
-- Infers goal-oriented descriptions from party names (e.g., 'seller' → 'selling')
-- Generates self-documenting tools that guide agents toward correct usage
-- No hardcoded mappings - everything is derived from NPL protocols
-- Supports arbitrary party names and domain-specific protocols
+    http://www.apache.org/licenses/LICENSE-2.0
 
-Philosophy:
-- Tools are NOT filtered by agent identity
-- Instead, tools describe their purpose and typical use cases
-- Agents self-select tools based on their objectives
-- NPL enforces party bindings at runtime
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
 """
 
 import logging

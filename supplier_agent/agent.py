@@ -1,16 +1,17 @@
 """
-Supplier/Seller Agent - Refactored to use EnterpriseAgentFactory.
+Copyright 2025 Noumena Digital AG
 
-This module has been dramatically simplified by leveraging the EnterpriseAgentFactory,
-which provides:
-- Runtime party role validation
-- Self-healing error recovery
-- Structured reasoning (Plan-ReAct)
-- Protocol memory management
-- Full observability
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
 
-The agent's behavior is now declarative: we specify the objective ("selling"),
-and the factory ensures tools align with that objective via runtime validation.
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
 """
 
 import logging
@@ -236,27 +237,7 @@ def _create_inventory_tools(inventory: Dict[str, Any]) -> List[FunctionTool]:
             "error": f"Product '{product_name}' not found in inventory"
         }
     
-    def update_stock(product_name: str, quantity_sold: int) -> Dict[str, Any]:
-        """
-        Update inventory stock after a sale.
-        
-        Args:
-            product_name: Name of the product
-            quantity_sold: Quantity that was sold
-        
-        Returns:
-            Confirmation of stock update
-        """
-        logger.info(f"Supplier agent updating stock for '{product_name}' (sold: {quantity_sold})")
-        # In a real system, this would update inventory in a database
-        return {
-            "success": True,
-            "message": f"Stock updated for '{product_name}'",
-            "quantity_sold": quantity_sold
-        }
-    
     return [
         FunctionTool(list_products, require_confirmation=False),
         FunctionTool(get_product_details, require_confirmation=False),
-        FunctionTool(update_stock, require_confirmation=False)
     ]

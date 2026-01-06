@@ -162,7 +162,7 @@ cp .env.example .env  # Add your Google API key
 ./scripts/setup-fresh.sh
 
 # Run the demo
-python demo_inventory_chat.py
+./start_demo.sh
 ```
 
 ## Learn More

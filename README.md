@@ -153,20 +153,21 @@ adk-demo/
 # Run all tests
 ./run_tests.sh
 
-# Or with pytest
-pytest tests/test_npl_integration.py tests/test_agent_core.py tests/test_monitoring.py -v
+# Or specific test suites
+./run_tests.sh integration  # NPL integration tests
+./run_tests.sh agents       # Agent core tests
+./run_tests.sh monitoring   # Monitoring/metrics tests
+./run_tests.sh notifications # Notification tests
 
-# Quick NPL-only tests
-pytest tests/test_npl_integration.py -v
-
-# Monitoring tests
-pytest tests/test_monitoring.py -v
+# Or with pytest directly
+pytest tests/ -v
 ```
 
-### Test Coverage (35 tests total)
-- **12 NPL Integration Tests**: Authentication, OpenAPI, tool generation, protocol creation
-- **5 Agent Core Tests**: Agent creation, tool loading, execution
-- **18 Monitoring Tests**: Metrics collection, structured logging, health checks, telemetry
+### Test Coverage
+- **12 NPL Integration Tests** (`test_npl_integration.py`): Authentication, OpenAPI, tool generation, protocol creation
+- **5 Agent Core Tests** (`test_agent_core.py`): Agent creation, tool loading, execution
+- **18 Monitoring Tests** (`test_monitoring.py`): Metrics collection, structured logging, health checks, telemetry
+- **4 Notification Tests** (`test_notifications.py`): Routing logic, event parsing, payload structure, prompt structure
 
 ## 🔧 Key Components
 
@@ -298,4 +299,4 @@ This prevents agents from creating protocols out of sequence or with incorrect p
 
 ## License
 
-MIT License
+Licensed under the Apache License, Version 2.0. See [LICENSE](LICENSE) for details.

@@ -1,15 +1,19 @@
 """
-NPL Engine Integration Tests
+Copyright 2025 Noumena Digital AG
 
-Tests for actual NPL Engine interactions:
-- Authentication with Keycloak
-- OpenAPI spec fetching
-- Tool generation from specs
-- Protocol creation
-- Error handling
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
 
-Run with: pytest tests/test_npl_integration.py -v
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
 """
+
 import pytest
 import uuid
 import sys

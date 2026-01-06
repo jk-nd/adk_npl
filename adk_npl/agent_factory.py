@@ -507,80 +507,15 @@ class EnterpriseAgentFactory:
             # Record metric for tool call start
             metrics.increment("agent.tool_calls.started", agent=agent_id, tool=tool_name)
             
-            # 🎯 ROLE-BASED ENFORCEMENT: Block protocol creation if agent role doesn't match
+            # 🎯 SEQUENTIAL PROCESSING: Check for protocol creation attempts
+            # Block if agent tries to create a new protocol without checking existing work
             if tool_name.startswith('npl_') and '_create' in tool_name:
                 # Extract protocol type from tool name (e.g., npl_commerce_Offer_create -> Offer)
                 parts = tool_name.split('_')
                 if len(parts) >= 3:
                     protocol_type = parts[2]  # e.g., "Offer", "Product", "PurchaseOrder"
                     
-                    # Define strict role-based rules for protocol creation
-                    role_restrictions = {
-                        "Offer": ["supplier", "seller"],  # Only suppliers create offers
-                        "PurchaseOrder": ["buyer", "purchasing"],  # Only buyers create purchase orders
-                        "Product": ["supplier", "seller"],  # Only suppliers create products
-                    }
-                    
-                    # Check if this protocol has role restrictions
-                    if protocol_type in role_restrictions:
-                        allowed_roles = role_restrictions[protocol_type]
-                        agent_role = agent_id.lower()
-                        
-                        # Block if agent's role doesn't match
-                        if not any(role in agent_role for role in allowed_roles):
-                            logger.warning(f"🚫 Agent {agent_id} tried to create {protocol_type} - ROLE VIOLATION!")
-                            metrics.increment("agent.workflow_violations.role_mismatch", agent=agent_id, protocol=protocol_type)
-                            
-                            # Provide specific guidance based on protocol type
-                            if protocol_type == "Offer":
-                                guidance = (
-                                    "**YOU ARE A BUYER.** Buyers do NOT create Offers!\n\n"
-                                    "**Correct workflow:**\n"
-                                    "1. Suppliers create and publish Offers\n"
-                                    "2. YOU (buyer) receive offers via A2A or notifications\n"
-                                    "3. YOU call npl_commerce_Offer_accept() or npl_commerce_Offer_reject()\n\n"
-                                    "**What to do now:**\n"
-                                    "- Wait for the supplier to send you an Offer UUID via A2A\n"
-                                    "- Or ask the supplier: 'Do you have any offers for me?'\n"
-                                    "- Then use npl_commerce_Offer_get(instance_id) to inspect it"
-                                )
-                            elif protocol_type == "PurchaseOrder":
-                                guidance = (
-                                    "**YOU ARE A SUPPLIER.** Suppliers do NOT create PurchaseOrders!\n\n"
-                                    "**Correct workflow:**\n"
-                                    "1. Buyers create PurchaseOrders after accepting your Offer\n"
-                                    "2. YOU (supplier) receive the PO UUID via notification or A2A\n"
-                                    "3. YOU call npl_commerce_PurchaseOrder_submitQuote(instance_id)\n\n"
-                                    "**What to do now:**\n"
-                                    "- Wait for the buyer to create a PurchaseOrder and share the UUID\n"
-                                    "- Or check recall_my_protocols() to see if you're already tracking one"
-                                )
-                            elif protocol_type == "Product":
-                                guidance = (
-                                    "**YOU ARE A BUYER.** Buyers do NOT create Products!\n\n"
-                                    "**Correct workflow:**\n"
-                                    "1. Suppliers create Products in their catalog\n"
-                                    "2. Suppliers create Offers referencing those Products\n"
-                                    "3. YOU (buyer) review and accept/reject Offers\n\n"
-                                    "**What to do now:**\n"
-                                    "- Ask the supplier what products they have available\n"
-                                    "- Wait for the supplier to send you Offer UUIDs"
-                                )
-                            else:
-                                guidance = f"Your role as {agent_id} does not allow creating {protocol_type} protocols."
-                            
-                            return {
-                                "error": (
-                                    f"🚫 ROLE VIOLATION: You cannot create {protocol_type} protocols!\n\n"
-                                    f"{guidance}\n\n"
-                                    f"Remember: Your identity and role determine WHAT you can create. "
-                                    f"The workflow sequence (Product → Offer → PurchaseOrder) tells you the ORDER, "
-                                    f"but your ROLE determines WHO creates each one."
-                                )
-                            }
-                    
-                    # 🎯 SEQUENTIAL PROCESSING: Check for protocol creation attempts
-                    # Block if agent tries to create a new protocol without checking existing work
+                    # Check if agent has called recall_my_protocols() this turn
                     recalled_this_turn = tool_call_counter.get("recalled", False)
                     
                     if not recalled_this_turn:
@@ -815,12 +750,6 @@ class EnterpriseAgentFactory:
             # The Smart NPL Bridge includes "🎯 PARTY ROLE: **{party}**" in descriptions
             tool_description = getattr(tool, 'description', '')
             party_role = self._extract_party_role_from_description(tool_description)
-            
-            # #region agent log
-            import json as _json_af, time as _time_af
-            with open("/Users/juerg/development/adk-demo/.cursor/debug.log", "a") as _f:
-                _f.write(_json_af.dumps({"location": "agent_factory.py:720", "message": "Tool party role extracted", "data": {"tool_name": tool_name, "party_role": party_role, "objective": objective}, "hypothesisId": "H1", "timestamp": _time_af.time()}) + "\n")
-            # #endregion
             
             if party_role:
                 # Create validator

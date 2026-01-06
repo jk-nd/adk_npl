@@ -1,8 +1,17 @@
 """
-Chat API - FastAPI server for human-to-agent chat interface.
+Copyright 2025 Noumena Digital AG
 
-The buyer and supplier agents are the SAME agents from the workflow demo,
-but triggered by human chat instead of a script.
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
 """
 
 import asyncio
@@ -46,6 +55,7 @@ from adk_npl.protocol_memory import (
 from adk_npl.partner_memory import PartnerMemory, create_partner_memory_tools
 from adk_npl.tools import create_identity_tool
 from adk_npl.inventory_tools import SupplierInventory, BuyerShoppingList
+from adk_npl.erp_sync import ErpSyncService
 from supplier_agent.agent import create_supplier_agent
 from purchasing_agent.agent import create_purchasing_agent
 
@@ -116,6 +126,9 @@ agents: Dict[str, any] = {}
 runners: Dict[str, Runner] = {}
 reset_counters: Dict[str, Callable] = {}  # Tool call counter reset functions
 session_service = InMemorySessionService()
+
+# Deterministic local state synchronizer (ERP-like)
+erp_sync_service: ErpSyncService | None = None
 
 # Session IDs (set on startup)
 buyer_session_id: str = ""
@@ -391,6 +404,15 @@ async def dispatch_npl_notification(notification_name: str, protocol_id: str, da
         return
     processed_notification_ids.add(notification_key)
     
+    # Deterministic "ERP" sync (non-blocking). Not agent logic.
+    global erp_sync_service
+    if erp_sync_service is not None:
+        try:
+            payload = data.get("notification", {}) or {}
+            asyncio.create_task(erp_sync_service.handle_notification(notification_name, protocol_id, payload))
+        except Exception as e:
+            logger.warning(f"ERP sync scheduling failed: {e}")
+
     # Rate limit: Ensure minimum cooldown between notifications of same type
     current_time = time.time()
     type_key = notification_name
@@ -752,7 +774,7 @@ def run_a2a_server(a2a_app, port: int, name: str):
 @app.on_event("startup")
 async def startup():
     """Initialize the existing buyer and supplier agents."""
-    global buyer_session_id, supplier_session_id
+    global buyer_session_id, supplier_session_id, erp_sync_service
     
     logger.info("🚀 Starting Chat API...")
     
@@ -795,6 +817,15 @@ async def startup():
         }
     )
     buyer_shopping_list = BuyerShoppingList(data_dir / "buyer_shopping_list.json")
+    
+    # Deterministic local state sync (ERP-like): updates shopping list + inventory on engine notifications
+    # Use buyer realm credentials for read access to PurchaseOrders.
+    erp_sync_service = ErpSyncService(
+        npl_config=buyer_config,
+        buyer_shopping_list=buyer_shopping_list,
+        supplier_inventory=supplier_inventory,
+        state_file=data_dir / "erp_sync_state.json",
+    )
     
     # Approver config (for notification listener - needs to see approval notifications)
     approver_config = NPLConfig(
@@ -1203,29 +1234,12 @@ async def restart_session():
     
     logger.info("🔄 Complete restart requested...")
     
-    # Clear activity log buffer and files
+    # Reinitialize activity logger with new file
     try:
-        activity_logger.clear_buffer()
-        logger.info("✅ Activity log buffer cleared")
+        activity_logger.reinitialize()
+        logger.info("✅ Activity logger reinitialized with new log file")
     except Exception as e:
-        logger.warning(f"Could not clear activity log buffer: {e}")
-    
-    # Clear activity log files
-    from pathlib import Path
-    log_dir = Path(__file__).parent.parent / "logs"
-    log_dir.mkdir(exist_ok=True)
-    
-    # Delete all activity log files (including symlink)
-    for log_file in log_dir.glob("activity_*.json"):
-        try:
-            if log_file.is_symlink():
-                log_file.unlink()
-            elif log_file.is_file():
-                log_file.unlink()
-        except Exception as e:
-            logger.warning(f"Could not delete {log_file}: {e}")
-    
-    logger.info("✅ Activity log files cleared")
+        logger.warning(f"Could not reinitialize activity logger: {e}")
     
     # Cancel notification listeners
     global notification_listener_tasks
@@ -1248,7 +1262,7 @@ async def restart_session():
     
     # Get the command to restart
     python_exe = sys.executable
-    script_path = Path(__file__).parent.parent / "demo_inventory_chat.py"
+    script_path = Path(__file__)
     
     # Schedule restart after response is sent
     def trigger_restart():

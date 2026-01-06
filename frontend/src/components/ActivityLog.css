@@ -50,31 +50,6 @@
   cursor: pointer;
 }
 
-.a2a-toggle {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  font-size: 0.8125rem;
-  color: var(--color-text-muted);
-  cursor: pointer;
-  padding: 0.25rem 0.5rem;
-  border-radius: 4px;
-  background-color: var(--color-card);
-  border: 1px solid var(--color-border);
-}
-
-.a2a-toggle:hover {
-  border-color: #f43f5e;
-}
-
-.a2a-toggle input {
-  cursor: pointer;
-}
-
-.a2a-toggle input:checked + span {
-  color: #f43f5e;
-}
-
 /* Multi-select Filter Dropdown */
 .filter-dropdown-container {
   position: relative;
@@ -271,14 +246,17 @@
 .type-badge.icon-agent { color: #3b82f6; }
 .type-badge.icon-reasoning { color: #06b6d4; }
 .type-badge.icon-message { color: #8b5cf6; }
+.type-badge.icon-thinking { color: #94a3b8; }
+.type-badge.icon-tool { color: #14b8a6; font-weight: 900; } /* Teal for tools */
 .type-badge.icon-api { color: #8b5cf6; }
 .type-badge.icon-transition { color: #10b981; font-weight: 900; }
 .type-badge.icon-auth { color: #f59e0b; }
 .type-badge.icon-bridge { color: #ec4899; }
-.type-badge.icon-demo { color: #64748b; }
 .type-badge.icon-llm { color: #8b5cf6; font-weight: 900; } /* Purple for LLM */
-.type-badge.icon-a2a { color: #f43f5e; font-weight: 900; } /* Rose for A2A */
 .type-badge.icon-a2a-message { color: #fb7185; } /* Lighter rose for A2A messages */
+.type-badge.icon-a2a-transfer { color: #f43f5e; font-weight: 900; } /* Rose for A2A transfers */
+.type-badge.icon-notification { color: #fbbf24; font-size: 1.1rem; } /* Yellow bell for notifications */
+.type-badge.icon-notification-done { color: #10b981; font-weight: 900; } /* Green check for processed */
 .type-badge.icon-approval { color: #ef4444; font-weight: 900; font-size: 1.2rem; } /* Red for urgent approval */
 .type-badge.icon-default { color: var(--color-text-muted); }
 
@@ -556,10 +534,6 @@
 }
 
 /* Agent Thinking Styles */
-.icon-thinking {
-  color: #94a3b8;
-}
-
 .agent-thinking-details {
   width: 100%;
 }

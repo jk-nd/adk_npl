@@ -1,3 +1,19 @@
+/*
+ * Copyright 2025 Noumena Digital AG
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 import { useQuery } from '@tanstack/react-query';
 import { useState } from 'react';
 import './ActivityLog.css';
@@ -14,41 +30,43 @@ interface ActivityEvent {
 const ACTIVITY_API_URL = 'http://localhost:8002';
 
 const actorColors: Record<string, string> = {
-  buyer_agent: '#3b82f6',  // blue
-  supplier_agent: '#10b981', // green
-  approver: '#f59e0b', // amber
-  npl_engine: '#8b5cf6', // purple
-  adk_npl_bridge: '#ec4899', // pink
-  keycloak: '#6366f1', // indigo
-  system: '#64748b', // slate
+  buyer_agent: '#3b82f6',      // blue
+  supplier_agent: '#10b981',   // green
+  approver: '#f59e0b',         // amber
+  'NPL Engine': '#8b5cf6',     // purple
+  npl_engine: '#8b5cf6',       // purple (legacy)
+  adk_npl_bridge: '#ec4899',   // pink
+  keycloak: '#6366f1',         // indigo
+  system: '#64748b',           // slate
 };
 
 const eventTypeIcons: Record<string, { icon: string; class: string }> = {
   agent_action: { icon: '◉', class: 'icon-agent' },
   agent_reasoning: { icon: '◐', class: 'icon-reasoning' },
   agent_message: { icon: '◈', class: 'icon-message' },
+  agent_thinking: { icon: '💭', class: 'icon-thinking' },
+  agent_tool_call: { icon: '⚙', class: 'icon-tool' },
   npl_api: { icon: '◆', class: 'icon-api' },
   state_transition: { icon: '→', class: 'icon-transition' },
   authentication: { icon: '●', class: 'icon-auth' },
   bridge_operation: { icon: '▪', class: 'icon-bridge' },
-  demo: { icon: '▸', class: 'icon-demo' },
   llm_call: { icon: '◎', class: 'icon-llm' },
   // A2A events
   a2a_message: { icon: '↔', class: 'icon-a2a-message' },
-  // Agent internal events
-  agent_thinking: { icon: '💭', class: 'icon-thinking' },
+  a2a_transfer: { icon: '⇄', class: 'icon-a2a-transfer' },
+  // Notifications
+  notification_received: { icon: '🔔', class: 'icon-notification' },
+  notification_processed: { icon: '✓', class: 'icon-notification-done' },
   // Human approval events
   approval_required: { icon: '⚠️', class: 'icon-approval' },
 };
 
-// Verbose event types that can be toggled (A2A details and agent thinking)
-const A2A_VERBOSE_TYPES = ['a2a_message', 'agent_thinking'];
-
 // All available event types organized by category (only actively used types)
 const EVENT_TYPE_CATEGORIES = {
-  'Agent Activity': ['agent_action', 'agent_reasoning', 'agent_message', 'agent_thinking'],
-  'A2A Communication': ['a2a_message'],
+  'Agent Activity': ['agent_action', 'agent_reasoning', 'agent_message', 'agent_thinking', 'agent_tool_call'],
+  'A2A Communication': ['a2a_message', 'a2a_transfer'],
   'NPL Engine': ['npl_api', 'state_transition', 'bridge_operation'],
+  'Notifications': ['notification_received', 'notification_processed'],
   'System': ['llm_call', 'authentication'],
   'Human Actions': ['approval_required']
 };
@@ -58,10 +76,14 @@ const EVENT_TYPE_LABELS: Record<string, string> = {
   agent_reasoning: 'Agent Reasoning', 
   agent_message: 'Agent Messages',
   agent_thinking: 'Agent Thinking',
+  agent_tool_call: 'Agent Tool Calls',
   a2a_message: 'A2A Messages',
+  a2a_transfer: 'A2A Transfers',
   npl_api: 'NPL API Calls',
   state_transition: 'State Transitions',
   bridge_operation: 'Bridge Operations',
+  notification_received: 'Notifications Received',
+  notification_processed: 'Notifications Processed',
   llm_call: 'LLM Calls',
   authentication: 'Authentication',
   approval_required: 'Approval Required'
@@ -70,7 +92,6 @@ const EVENT_TYPE_LABELS: Record<string, string> = {
 export function ActivityLog() {
   const [selectedTypes, setSelectedTypes] = useState<Set<string>>(new Set(['all']));
   const [autoRefresh, setAutoRefresh] = useState(true);
-  const [showA2ADetails, setShowA2ADetails] = useState(true);
   const [filterOpen, setFilterOpen] = useState(false);
 
   const isAllSelected = selectedTypes.has('all');
@@ -198,14 +219,6 @@ export function ActivityLog() {
             />
             <span>Auto</span>
           </label>
-          <label className="a2a-toggle" title="Show detailed A2A messages and agent thinking">
-            <input
-              type="checkbox"
-              checked={showA2ADetails}
-              onChange={(e) => setShowA2ADetails(e.target.checked)}
-            />
-            <span>Verbose</span>
-          </label>
           <div className="filter-dropdown-container">
             <button 
               className="filter-dropdown-btn" 
@@ -264,9 +277,7 @@ export function ActivityLog() {
               </tr>
             </thead>
             <tbody>
-              {filteredEvents
-                .filter(event => showA2ADetails || !A2A_VERBOSE_TYPES.includes(event.event_type))
-                .map((event, index) => {
+              {filteredEvents?.map((event, index) => {
                 const iconInfo = eventTypeIcons[event.event_type] || { icon: '•', class: 'icon-default' };
                 return (
                   <tr key={index} className={`event-row ${getLevelClass(event.level)}`}>

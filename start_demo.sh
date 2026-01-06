@@ -52,10 +52,9 @@ echo ""
 # Create logs directory
 mkdir -p logs
 
-# Clear old activity logs for fresh start
-echo -e "${YELLOW}🧹 Clearing old activity logs...${NC}"
-rm -f logs/activity_*.json 2>/dev/null || true
-echo -e "${GREEN}✅ Activity logs cleared${NC}"
+# Note: Activity logs are kept for historical record
+# Each session creates a new activity_TIMESTAMP.json file
+echo -e "${BLUE}📝 Activity logs will be created in logs/ directory${NC}"
 echo ""
 
 # Function to cleanup on exit
@@ -63,7 +62,7 @@ cleanup() {
     echo ""
     echo -e "${YELLOW}🛑 Shutting down services...${NC}"
     pkill -f "activity_api/main.py" 2>/dev/null || true
-    pkill -f "demo_inventory_chat.py" 2>/dev/null || true
+    pkill -f "chat_api/main.py" 2>/dev/null || true
     pkill -f "vite" 2>/dev/null || true
     echo -e "${GREEN}✅ Cleanup complete${NC}"
     exit 0
@@ -129,5 +128,5 @@ echo -e "${BLUE}============================================================${NC
 echo ""
 
 # Run the main chat API in foreground (this blocks)
-python demo_inventory_chat.py
+cd chat_api && uvicorn main:app --host 0.0.0.0 --port 8001
 

@@ -1,16 +1,17 @@
 """
-Buyer/Purchasing Agent - Refactored to use EnterpriseAgentFactory.
+Copyright 2025 Noumena Digital AG
 
-This module has been dramatically simplified by leveraging the EnterpriseAgentFactory,
-which provides:
-- Runtime party role validation
-- Self-healing error recovery  
-- Structured reasoning (Plan-ReAct)
-- Protocol memory management
-- Full observability
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
 
-The agent's behavior is now declarative: we specify the objective ("buying"),
-and the factory ensures tools align with that objective via runtime validation.
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
 """
 
 import logging
@@ -236,27 +237,7 @@ def _create_shopping_list_tools(shopping_list: Dict[str, Any]) -> List[FunctionT
             "error": f"Item '{item_name}' not found on shopping list"
         }
     
-    def mark_item_purchased(item_name: str, order_id: str) -> Dict[str, Any]:
-        """
-        Mark an item as purchased with reference to the order.
-        
-        Args:
-            item_name: Name of the item
-            order_id: Purchase order ID or transaction reference
-        
-        Returns:
-            Confirmation of update
-        """
-        logger.info(f"Buyer agent marking '{item_name}' as purchased (order: {order_id})")
-        # In a real system, this would update the shopping list in a database
-        return {
-            "success": True,
-            "message": f"Item '{item_name}' marked as purchased",
-            "order_id": order_id
-        }
-    
     return [
         FunctionTool(list_shopping_items, require_confirmation=False),
         FunctionTool(get_shopping_item_details, require_confirmation=False),
-        FunctionTool(mark_item_purchased, require_confirmation=False)
     ]

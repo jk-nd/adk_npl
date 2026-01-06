@@ -52,10 +52,16 @@ check_keycloak() {
 }
 
 case "${1:-all}" in
-    quick)
-        echo -e "${YELLOW}Running quick tests (mocked, no API calls)...${NC}"
+    monitoring)
+        echo -e "${YELLOW}Running monitoring tests (no external dependencies)...${NC}"
         echo ""
-        pytest tests/test_utils.py tests/test_monitoring.py -v --tb=short
+        pytest tests/test_monitoring.py -v --tb=short
+        ;;
+    
+    notifications)
+        echo -e "${YELLOW}Running notification tests...${NC}"
+        echo ""
+        pytest tests/test_notifications.py -v --tb=short
         ;;
     
     integration)
@@ -83,16 +89,20 @@ case "${1:-all}" in
         check_keycloak || exit 1
         echo ""
         
+        echo -e "${BLUE}--- Monitoring Tests ---${NC}"
+        pytest tests/test_monitoring.py -v --tb=short || true
+        
+        echo ""
+        echo -e "${BLUE}--- Notification Tests ---${NC}"
+        pytest tests/test_notifications.py -v --tb=short || true
+        
+        echo ""
         echo -e "${BLUE}--- NPL Integration Tests ---${NC}"
         pytest tests/test_npl_integration.py -v --tb=short || true
         
         echo ""
         echo -e "${BLUE}--- Agent Core Tests ---${NC}"
         pytest tests/test_agent_core.py -v --tb=short || true
-        
-        echo ""
-        echo -e "${BLUE}--- Utility Tests ---${NC}"
-        pytest tests/test_utils.py tests/test_monitoring.py -v --tb=short 2>/dev/null || true
         ;;
     
     *)
@@ -101,7 +111,8 @@ case "${1:-all}" in
         echo "Usage: ./run_tests.sh [suite]"
         echo ""
         echo "Available suites:"
-        echo "  quick        - Run quick tests (no API calls)"
+        echo "  monitoring   - Run monitoring/metrics tests (no external dependencies)"
+        echo "  notifications- Run notification tests"
         echo "  integration  - Run NPL integration tests"
         echo "  agents       - Run agent core tests"
         echo "  all          - Run all tests (default)"
