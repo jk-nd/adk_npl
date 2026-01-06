@@ -136,6 +136,26 @@ export function MetricsDashboard() {
         </div>
       </div>
 
+      {/* Work in Progress Notice */}
+      <div className="wip-notice" style={{
+        backgroundColor: '#fef3c7',
+        border: '1px solid #f59e0b',
+        borderRadius: '8px',
+        padding: '12px 16px',
+        marginBottom: '20px',
+        display: 'flex',
+        alignItems: 'center',
+        gap: '10px'
+      }}>
+        <span style={{ fontSize: '20px' }}>⚠️</span>
+        <div>
+          <strong style={{ color: '#92400e' }}>Work in Progress</strong>
+          <p style={{ margin: '4px 0 0 0', fontSize: '13px', color: '#78350f' }}>
+            Some metrics (Tool Calls, A2A Messages, Notifications) may not display correctly. To be fixed in a future update.
+          </p>
+        </div>
+      </div>
+
       {/* Key Metrics Overview */}
       <div className="metrics-overview">
         <div className="metric-card llm">

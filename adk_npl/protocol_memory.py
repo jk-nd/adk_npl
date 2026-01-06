@@ -19,6 +19,7 @@ import logging
 from typing import Dict, Any, List, Optional
 from datetime import datetime, timezone
 from google.adk.tools import FunctionTool
+from .activity_logger import get_activity_logger
 
 logger = logging.getLogger(__name__)
 
@@ -204,6 +205,14 @@ def create_memory_tools(agent_id: str = "default") -> List[FunctionTool]:
             - Find by state: recall_my_protocols(state="Published")
         """
         logger.info(f"🧭 recall_my_protocols CALLED by {agent_id} with type={protocol_type}, state={state}")
+        
+        # Log to activity log for metrics tracking
+        get_activity_logger().log_tool_call(
+            actor=agent_id,
+            tool_name="recall_my_protocols",
+            args={"protocol_type": protocol_type, "state": state}
+        )
+        
         protocols = memory.get_protocols(protocol_type=protocol_type, state=state)
         logger.info(f"🧭 recall_my_protocols RESULT: {len(protocols)} protocols found")
         

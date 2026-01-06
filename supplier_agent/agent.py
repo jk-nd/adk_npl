@@ -24,6 +24,7 @@ from google.adk.sessions import InMemorySessionService
 from adk_npl.config import NPLConfig
 from adk_npl.agent_factory import EnterpriseAgentFactory
 from adk_npl.goal_schemas import SupplierGoalStatus
+from adk_npl.activity_logger import get_activity_logger
 
 logger = logging.getLogger(__name__)
 
@@ -223,6 +224,14 @@ def _create_inventory_tools(inventory: Dict[str, Any]) -> List[FunctionTool]:
             Dictionary with products and their details (name, price, stock)
         """
         logger.info("📦 list_products() CALLED - Supplier checking inventory!")
+        
+        # Log to activity log for metrics tracking
+        get_activity_logger().log_tool_call(
+            actor="supplier_agent",
+            tool_name="list_products",
+            args={}
+        )
+        
         return {
             "success": True,
             "products": inventory.get("products", []),

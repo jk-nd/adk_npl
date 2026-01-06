@@ -378,6 +378,38 @@ class ActivityLogger:
         }
         self.log_event("agent_thinking", agent_id, "💭 thinking", details, "debug")
     
+    def log_tool_call(
+        self,
+        actor: str,
+        tool_name: str,
+        args: Optional[Dict[str, Any]] = None,
+        result: Optional[Dict[str, Any]] = None,
+        success: bool = True
+    ):
+        """
+        Log a tool call (meta-tool or custom tool, not NPL API).
+        
+        Args:
+            actor: The agent making the tool call
+            tool_name: Name of the tool
+            args: Tool arguments
+            result: Tool result (optional)
+            success: Whether the call succeeded
+        """
+        details = {
+            "tool_name": tool_name,
+            "args": args or {},
+            "success": success,
+            "agent": actor
+        }
+        if result:
+            # Truncate large results
+            result_str = str(result)
+            details["result_preview"] = result_str[:200] if len(result_str) > 200 else result_str
+        
+        level = "info" if success else "warning"
+        self.log_event("tool_call", actor, f"🔧 {tool_name}", details, level)
+    
     def get_recent_events(self, limit: int = 100) -> List[Dict[str, Any]]:
         """Get recent events from buffer."""
         with self.buffer_lock:

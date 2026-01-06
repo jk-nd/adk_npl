@@ -295,6 +295,7 @@ This prevents agents from creating protocols out of sequence or with incorrect p
 ## 📚 Documentation
 
 - **`docs/WHY_AGENTS_FAILED.md`** - **Start here**: The journey from failing agents to NPL-assisted architecture
+- **`docs/DEMO_RUN_REPORT.md`** - Comprehensive analysis of a demo run with metrics
 - `docs/AGENTS.md` - Agent architecture and design principles
 - `docs/MONITORING.md` - Observability, metrics, and telemetry
 - `docs/A2A_COMMUNICATION.md` - Agent-to-Agent protocol details

@@ -308,15 +308,14 @@ async def get_metrics_summary() -> Dict[str, Any]:
             return {"counters": {}, "latencies": {}, "recent_errors": [], "timestamp": "",
                     "llm_calls": None, "a2a_transfers": None, "npl_calls": None}
         
-        latest_link = logs_dir / "activity_latest.json"
-        if not latest_link.exists():
-            log_files = sorted(logs_dir.glob("activity_*.json"), key=lambda p: p.stat().st_mtime, reverse=True)
-            if not log_files:
-                return {"counters": {}, "latencies": {}, "recent_errors": [], "timestamp": "",
-                        "llm_calls": None, "a2a_transfers": None, "npl_calls": None}
-            log_file = log_files[0]
-        else:
-            log_file = latest_link
+        # Always find the most recent file by modification time (more reliable than symlink)
+        # Get all activity log files, excluding the symlink
+        all_files = [f for f in logs_dir.glob("activity_*.json") if f.name != "activity_latest.json"]
+        if not all_files:
+            return {"counters": {}, "latencies": {}, "recent_errors": [], "timestamp": "",
+                    "llm_calls": None, "a2a_transfers": None, "npl_calls": None}
+        # Sort by modification time and get the most recent
+        log_file = max(all_files, key=lambda p: p.stat().st_mtime)
         
         # Parse events and calculate metrics
         from collections import defaultdict
@@ -333,6 +332,13 @@ async def get_metrics_summary() -> Dict[str, Any]:
         a2a_transfers_total = 0
         a2a_by_agent = defaultdict(int)
         a2a_latencies = []
+        
+        # A2A message metrics (detailed)
+        a2a_sent = 0
+        a2a_received = 0
+        a2a_errors = 0
+        a2a_by_route = defaultdict(int)
+        a2a_roundtrip_times = []
         
         # NPL metrics
         npl_calls_total = 0
@@ -386,10 +392,29 @@ async def get_metrics_summary() -> Dict[str, Any]:
                     if event_type == 'a2a_message':
                         a2a_transfers_total += 1
                         from_agent = details.get('from_agent', actor)
+                        to_agent = details.get('to_agent', 'unknown')
                         a2a_by_agent[from_agent] += 1
-                        latency = details.get('latency_ms', 0)
+                        
+                        # Track sent/received
+                        direction = details.get('direction', 'send')
+                        if direction == 'send':
+                            a2a_sent += 1
+                        elif direction == 'receive':
+                            a2a_received += 1
+                        
+                        # Track route
+                        route = f"{from_agent} → {to_agent}"
+                        a2a_by_route[route] += 1
+                        
+                        # Track errors
+                        if level == 'error' or details.get('error'):
+                            a2a_errors += 1
+                        
+                        # Track latency/roundtrip
+                        latency = details.get('latency_ms') or details.get('roundtrip_ms', 0)
                         if latency and latency > 0:
                             a2a_latencies.append(latency)
+                            a2a_roundtrip_times.append(latency)
                     
                     # NPL API call metrics
                     if event_type == 'npl_api':
@@ -411,26 +436,16 @@ async def get_metrics_summary() -> Dict[str, Any]:
                     # Notification metrics
                     if event_type == 'npl_notification':
                         notifications_total += 1
-                        agent = details.get('agent', actor)
+                        # For notifications, try to get the target agent from details, fallback to actor
+                        agent = details.get('target_agent') or details.get('agent') or actor
                         notifications_by_agent[agent] += 1
-                        notif_type = details.get('notification_type', 'unknown')
+                        # Extract notification type from the notification path
+                        notif_path = details.get('notification', 'unknown')
+                        # Extract type from path like "/1.0?/commerce/ApprovalRequiredNotification"
+                        notif_type = notif_path.split('/')[-1] if '/' in notif_path else notif_path
                         notifications_by_type[notif_type] += 1
                     
                     # Tool call metrics  
-                    if event_type == 'tool_call':
-                        tool_calls_total += 1
-                        agent = details.get('agent', actor)
-                        tool_calls_by_agent[agent] += 1
-                    
-                    # Notification metrics
-                    if event_type == 'npl_notification':
-                        notifications_total += 1
-                        agent = details.get('agent', actor)
-                        notifications_by_agent[agent] += 1
-                        notif_type = details.get('notification_type', 'unknown')
-                        notifications_by_type[notif_type] += 1
-                    
-                    # Tool call metrics
                     if event_type == 'tool_call':
                         tool_calls_total += 1
                         agent = details.get('agent', actor)
@@ -516,6 +531,18 @@ async def get_metrics_summary() -> Dict[str, Any]:
                 "avg_latency_ms": sum(a2a_latencies) / len(a2a_latencies) if a2a_latencies else 0
             }
         
+        a2a_messages = None
+        if a2a_sent > 0 or a2a_received > 0:
+            total_a2a = a2a_sent + a2a_received
+            a2a_messages = {
+                "total_sent": a2a_sent,
+                "total_received": a2a_received,
+                "total_errors": a2a_errors,
+                "by_route": dict(a2a_by_route),
+                "avg_roundtrip_ms": sum(a2a_roundtrip_times) / len(a2a_roundtrip_times) if a2a_roundtrip_times else 0,
+                "success_rate": (total_a2a - a2a_errors) / total_a2a if total_a2a > 0 else 1.0
+            }
+        
         npl_calls = None
         if npl_calls_total > 0:
             npl_calls = {
@@ -549,6 +576,7 @@ async def get_metrics_summary() -> Dict[str, Any]:
             "tool_calls": tool_calls,
             "notifications": notifications,
             "a2a_transfers": a2a_transfers,
+            "a2a_messages": a2a_messages,
             "npl_calls": npl_calls,
             "timestamp": datetime.now().isoformat()
         }

@@ -24,6 +24,7 @@ from google.adk.sessions import InMemorySessionService
 from adk_npl.config import NPLConfig
 from adk_npl.agent_factory import EnterpriseAgentFactory
 from adk_npl.goal_schemas import BuyerGoalStatus
+from adk_npl.activity_logger import get_activity_logger
 
 logger = logging.getLogger(__name__)
 
@@ -223,6 +224,14 @@ def _create_shopping_list_tools(shopping_list: Dict[str, Any]) -> List[FunctionT
             Dictionary with items and their details (name, quantity, specs)
         """
         logger.info("📋 list_shopping_items() CALLED - Buyer checking shopping list!")
+        
+        # Log to activity log for metrics tracking
+        get_activity_logger().log_tool_call(
+            actor="buyer_agent",
+            tool_name="list_shopping_items",
+            args={}
+        )
+        
         return {
             "success": True,
             "items": shopping_list.get("needs", []),

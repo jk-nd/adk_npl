@@ -31,7 +31,7 @@ const ACTIVITY_API_URL = 'http://localhost:8002';
 
 const actorColors: Record<string, string> = {
   buyer_agent: '#3b82f6',      // blue
-  supplier_agent: '#10b981',   // green
+  supplier_agent: '#06b6d4',   // cyan/teal (different from NPL Engine green)
   approver: '#f59e0b',         // amber
   'NPL Engine': '#8b5cf6',     // purple
   npl_engine: '#8b5cf6',       // purple (legacy)
@@ -61,74 +61,11 @@ const eventTypeIcons: Record<string, { icon: string; class: string }> = {
   approval_required: { icon: '⚠️', class: 'icon-approval' },
 };
 
-// All available event types organized by category (only actively used types)
-const EVENT_TYPE_CATEGORIES = {
-  'Agent Activity': ['agent_action', 'agent_reasoning', 'agent_message', 'agent_thinking', 'agent_tool_call'],
-  'A2A Communication': ['a2a_message', 'a2a_transfer'],
-  'NPL Engine': ['npl_api', 'state_transition', 'bridge_operation'],
-  'Notifications': ['notification_received', 'notification_processed'],
-  'System': ['llm_call', 'authentication'],
-  'Human Actions': ['approval_required']
-};
-
-const EVENT_TYPE_LABELS: Record<string, string> = {
-  agent_action: 'Agent Actions',
-  agent_reasoning: 'Agent Reasoning', 
-  agent_message: 'Agent Messages',
-  agent_thinking: 'Agent Thinking',
-  agent_tool_call: 'Agent Tool Calls',
-  a2a_message: 'A2A Messages',
-  a2a_transfer: 'A2A Transfers',
-  npl_api: 'NPL API Calls',
-  state_transition: 'State Transitions',
-  bridge_operation: 'Bridge Operations',
-  notification_received: 'Notifications Received',
-  notification_processed: 'Notifications Processed',
-  llm_call: 'LLM Calls',
-  authentication: 'Authentication',
-  approval_required: 'Approval Required'
-};
 
 export function ActivityLog() {
-  const [selectedTypes, setSelectedTypes] = useState<Set<string>>(new Set(['all']));
   const [autoRefresh, setAutoRefresh] = useState(true);
-  const [filterOpen, setFilterOpen] = useState(false);
 
-  const isAllSelected = selectedTypes.has('all');
-
-  const toggleType = (type: string) => {
-    const newSelected = new Set(selectedTypes);
-    if (type === 'all') {
-      // Toggle "all" - if selected, clear everything; if not, select all
-      if (isAllSelected) {
-        newSelected.clear();
-      } else {
-        newSelected.clear();
-        newSelected.add('all');
-      }
-    } else {
-      // Toggle specific type
-      newSelected.delete('all'); // Remove "all" when selecting specific types
-      if (newSelected.has(type)) {
-        newSelected.delete(type);
-      } else {
-        newSelected.add(type);
-      }
-      // If nothing selected, default to "all"
-      if (newSelected.size === 0) {
-        newSelected.add('all');
-      }
-    }
-    setSelectedTypes(newSelected);
-  };
-
-  const getFilterLabel = () => {
-    if (isAllSelected) return 'All Events';
-    if (selectedTypes.size === 1) return EVENT_TYPE_LABELS[Array.from(selectedTypes)[0]] || 'Filter';
-    return `${selectedTypes.size} types`;
-  };
-
-  // Fetch recent activity (always fetch all, filter client-side for multi-select)
+  // Fetch recent activity (show all events, no filtering)
   const { data: events, refetch } = useQuery<ActivityEvent[]>({
     queryKey: ['activity', 'recent'],
     queryFn: async () => {
@@ -137,12 +74,6 @@ export function ActivityLog() {
       return response.json();
     },
     refetchInterval: autoRefresh ? 2000 : false,
-  });
-
-  // Filter events based on selected types
-  const filteredEvents = events?.filter(event => {
-    if (isAllSelected) return true;
-    return selectedTypes.has(event.event_type);
   });
 
   const formatTimestamp = (timestamp: string) => {
@@ -208,7 +139,7 @@ export function ActivityLog() {
       <div className="activity-log-header">
         <div className="header-left">
           <h2>Activity Feed</h2>
-          <span className="event-count">{filteredEvents?.length || 0} events</span>
+          <span className="event-count">{events?.length || 0} events</span>
         </div>
         <div className="activity-log-controls">
           <label className="auto-refresh-toggle">
@@ -219,42 +150,6 @@ export function ActivityLog() {
             />
             <span>Auto</span>
           </label>
-          <div className="filter-dropdown-container">
-            <button 
-              className="filter-dropdown-btn" 
-              onClick={() => setFilterOpen(!filterOpen)}
-            >
-              {getFilterLabel()} ▾
-            </button>
-            {filterOpen && (
-              <div className="filter-dropdown-menu">
-                <label className="filter-option all-option">
-                  <input 
-                    type="checkbox" 
-                    checked={isAllSelected}
-                    onChange={() => toggleType('all')}
-                  />
-                  <span>All Events</span>
-                </label>
-                <div className="filter-divider" />
-                {Object.entries(EVENT_TYPE_CATEGORIES).map(([category, types]) => (
-                  <div key={category} className="filter-category">
-                    <div className="filter-category-label">{category}</div>
-                    {types.map(type => (
-                      <label key={type} className="filter-option">
-                        <input 
-                          type="checkbox" 
-                          checked={isAllSelected || selectedTypes.has(type)}
-                          onChange={() => toggleType(type)}
-                        />
-                        <span>{EVENT_TYPE_LABELS[type]}</span>
-                      </label>
-                    ))}
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
           <button className="refresh-btn" onClick={() => refetch()} title="Refresh">
             ↻
           </button>
@@ -262,8 +157,8 @@ export function ActivityLog() {
       </div>
 
       {/* Compact Event Table */}
-      <div className="activity-table" onClick={() => filterOpen && setFilterOpen(false)}>
-        {!filteredEvents || filteredEvents.length === 0 ? (
+      <div className="activity-table">
+        {!events || events.length === 0 ? (
           <div className="no-events">No activity events yet. Run the demo script to see logs.</div>
         ) : (
           <table>
@@ -277,7 +172,7 @@ export function ActivityLog() {
               </tr>
             </thead>
             <tbody>
-              {filteredEvents?.map((event, index) => {
+              {events?.map((event, index) => {
                 const iconInfo = eventTypeIcons[event.event_type] || { icon: '•', class: 'icon-default' };
                 return (
                   <tr key={index} className={`event-row ${getLevelClass(event.level)}`}>
