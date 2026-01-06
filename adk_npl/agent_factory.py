@@ -340,14 +340,35 @@ class EnterpriseAgentFactory:
             )
             token = await auth.authenticate()
             
-            # Create NPL client with agent_id as caller_id for activity logging
+            # Create a token refresh callback that re-authenticates with Keycloak
+            def refresh_token() -> str:
+                """Synchronous token refresh callback for NPLClient."""
+                import asyncio
+                try:
+                    # Get or create event loop
+                    try:
+                        loop = asyncio.get_event_loop()
+                    except RuntimeError:
+                        loop = asyncio.new_event_loop()
+                        asyncio.set_event_loop(loop)
+                    
+                    # Run the async authenticate in the loop
+                    new_token = loop.run_until_complete(auth.authenticate())
+                    logger.info(f"🔄 Token refreshed for agent: {agent_id}")
+                    return new_token
+                except Exception as e:
+                    logger.error(f"❌ Token refresh failed for {agent_id}: {e}")
+                    raise
+            
+            # Create NPL client with token refresh capability
             self._npl_client = NPLClient(
                 base_url=self.npl_config.engine_url,
                 auth_token=token,
+                token_refresh_callback=refresh_token,  # Enable automatic token refresh
                 caller_id=agent_id
             )
             
-            logger.info(f"NPL client initialized for agent: {agent_id}")
+            logger.info(f"NPL client initialized for agent: {agent_id} (with token refresh)")
     
     async def create_agent(
         self,
@@ -438,8 +459,14 @@ class EnterpriseAgentFactory:
         from .tools import create_identity_tool
         identity_tool = create_identity_tool(self.npl_config)
         
+        # Add highly-discoverable orientation tool (GENERIC - works with any NPL)
+        what_can_i_do_tool = self._create_what_can_i_do_tool(
+            agent_id=agent_id,
+            packages=packages
+        )
+        
         # Combine all tools
-        all_tools = npl_tools + memory_tools + [identity_tool]
+        all_tools = npl_tools + memory_tools + [identity_tool, what_can_i_do_tool]
         if additional_tools:
             all_tools.extend(additional_tools)
         
@@ -804,6 +831,160 @@ class EnterpriseAgentFactory:
             return match.group(1).lower()
         
         return None
+    
+    def _create_what_can_i_do_tool(
+        self,
+        agent_id: str,
+        packages: List[str]
+    ) -> FunctionTool:
+        """
+        Create a highly-discoverable orientation tool that shows ALL available actions.
+        
+        This is GENERIC - works with any NPL protocols in any domain.
+        It queries NPL dynamically, so it adapts to protocol changes automatically.
+        """
+        def what_can_i_do(include_details: bool = False) -> Dict[str, Any]:
+            """
+            🧭 ORIENTATION: See ALL available actions across ALL your protocols.
+            
+            Call this when:
+            - You receive a notification
+            - You start a new turn
+            - You're not sure what to do next
+            
+            This tool queries NPL (source of truth) to show you what actions
+            are available RIGHT NOW on every protocol you're tracking.
+            
+            Args:
+                include_details: Include full action details (default: False)
+            
+            Returns:
+                Summary of protocols and available actions
+                
+            Example Response:
+                {
+                  "protocols": [
+                    {
+                      "type": "PurchaseOrder",
+                      "id": "abc-123",
+                      "state": "Approved",
+                      "available_actions": ["placeOrder", "cancelOrder"]
+                    }
+                  ],
+                  "guidance": "Pick ONE action and execute it"
+                }
+            """
+            try:
+                # Get all tracked protocols from memory
+                memory = NPLProtocolMemory.get_instance(agent_id)
+                all_protocols = memory.get_protocols()
+                
+                if not all_protocols:
+                    return {
+                        "success": True,
+                        "message": "No protocols in memory yet. Start by creating one or responding to a notification.",
+                        "protocols": [],
+                        "hint": "Use list_shopping_items() or check_inventory() to see what you need to work on"
+                    }
+                
+                results = []
+                
+                # Process each tracked protocol
+                for protocol_entry in all_protocols:
+                    protocol_type = protocol_entry["protocol_type"]
+                    instance_id = protocol_entry["instance_id"]
+                    
+                    # Determine package (try all packages the agent knows about)
+                    found = False
+                    for package in packages:
+                        try:
+                            # Query NPL for current state
+                            instance = self._npl_client.get_instance(
+                                package=package,
+                                protocol_name=protocol_type,
+                                instance_id=instance_id
+                            )
+                            
+                            current_state = instance.get("@state", "unknown")
+                            
+                            # Get metadata from NPL source (if available)
+                            from .tools import NPLToolGenerator
+                            metadata = NPLToolGenerator._get_protocol_metadata(
+                                NPLToolGenerator(self._npl_client, memory),
+                                package,
+                                protocol_type
+                            )
+                            
+                            # Extract available actions from metadata
+                            available_actions = []
+                            if metadata:
+                                permissions = metadata.get('permissions', [])
+                                for perm in permissions:
+                                    source_states = perm.get('source_states', [])
+                                    if current_state in source_states or not source_states:
+                                        action_info = {
+                                            "action": perm['action'],
+                                            "leads_to": perm.get('target_states', [current_state])[0] if perm.get('target_states') else current_state,
+                                            "tool_call": f"npl_{package}_{protocol_type}_{perm['action']}(instance_id='{instance_id}')"
+                                        }
+                                        available_actions.append(action_info)
+                            
+                            # Build protocol summary
+                            protocol_summary = {
+                                "protocol_type": protocol_type,
+                                "package": package,
+                                "instance_id": instance_id,
+                                "current_state": current_state,
+                                "available_actions": [a["action"] for a in available_actions] if not include_details else available_actions,
+                                "is_final": metadata.get('states', {}).get(current_state) == 'final' if metadata else False
+                            }
+                            
+                            results.append(protocol_summary)
+                            found = True
+                            break  # Found it in this package
+                            
+                        except Exception as e:
+                            # Try next package
+                            continue
+                    
+                    if not found:
+                        # Could not find protocol in any package
+                        results.append({
+                            "protocol_type": protocol_type,
+                            "instance_id": instance_id,
+                            "error": f"Could not retrieve protocol (may be in different package)",
+                            "suggestion": f"Try recall_my_protocols() to refresh memory"
+                        })
+                
+                # Separate in-progress from final protocols
+                in_progress = [p for p in results if not p.get('is_final') and not p.get('error')]
+                completed = [p for p in results if p.get('is_final')]
+                
+                return {
+                    "success": True,
+                    "total_protocols": len(results),
+                    "in_progress": in_progress,
+                    "completed": completed,
+                    "guidance": (
+                        "🎯 NEXT STEPS:\n"
+                        "1. Focus on 'in_progress' protocols first\n"
+                        "2. Pick ONE action from 'available_actions'\n"
+                        "3. Execute it: npl_{package}_{type}_{action}(instance_id='...')\n"
+                        "4. STOP and wait for response"
+                    ) if in_progress else (
+                        "✅ All protocols complete! Start a new transaction if needed."
+                    )
+                }
+                
+            except Exception as e:
+                logger.error(f"Error in what_can_i_do: {e}", exc_info=True)
+                return {
+                    "success": False,
+                    "error": str(e),
+                    "fallback": "Try: recall_my_protocols() then npl_*_next_actions(instance_id='...') manually"
+                }
+        
+        return FunctionTool(what_can_i_do, require_confirmation=False)
     
     def _build_instructions(
         self,
