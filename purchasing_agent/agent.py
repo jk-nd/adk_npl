@@ -212,12 +212,17 @@ def _create_shopping_list_tools(shopping_list: Dict[str, Any]) -> List[FunctionT
     """
     def list_shopping_items() -> Dict[str, Any]:
         """
-        List all items on your shopping list.
+        📋 BUSINESS STATE: Check what you need to purchase.
+        
+        🚨 CRITICAL: Use this to see what items you should buy!
+        
+        This shows your shopping list - the items your organization needs.
+        Check this when you have NO active protocols to see what work needs to be done.
         
         Returns:
             Dictionary with items and their details (name, quantity, specs)
         """
-        logger.info("Buyer agent querying shopping list")
+        logger.info("📋 list_shopping_items() CALLED - Buyer checking shopping list!")
         return {
             "success": True,
             "items": shopping_list.get("needs", []),

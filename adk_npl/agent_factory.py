@@ -477,6 +477,10 @@ class EnterpriseAgentFactory:
         
         logger.info(f"Total tools for agent: {len(all_tools)} (docstrings optimized)")
         
+        # 🔍 DEBUG: Log all tool names for verification
+        tool_names = [getattr(t, 'name', getattr(t, '__name__', str(t))) for t in all_tools]
+        logger.info(f"📋 Available tools: {', '.join(sorted(tool_names))}")
+        
         # Build instructions
         instructions = self._build_instructions(
             agent_id=agent_id,

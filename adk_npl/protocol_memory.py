@@ -178,11 +178,18 @@ def create_memory_tools(agent_id: str = "default") -> List[FunctionTool]:
         state: Optional[str] = None
     ) -> Dict[str, Any]:
         """
-        Recall all NPL protocol instances you have created or interacted with.
+        🧭 MEMORY CHECK: See ALL protocols you've created or are working on.
         
-        Use this tool when you need to remember IDs of protocols you've worked with.
-        This is essential for multi-step workflows where you need to reference
-        previously created instances.
+        🚨 CRITICAL: Call this FIRST before creating any new protocols to avoid duplicates!
+        
+        This tool shows you what workflows are already in progress so you don't
+        create duplicate Product, Offer, or PurchaseOrder instances.
+        
+        Call this when:
+        - Starting a new task (check what exists FIRST)
+        - Before creating any protocol (avoid duplicates)
+        - After receiving a notification (see updated states)
+        - When unsure what to do next (orient yourself)
         
         Args:
             protocol_type: Optional filter by protocol type name (any NPL protocol)
@@ -192,11 +199,13 @@ def create_memory_tools(agent_id: str = "default") -> List[FunctionTool]:
             List of protocol instances with IDs, types, states, and metadata
             
         Example Usage:
-            - "What protocols of type X have I created?" → recall_my_protocols(protocol_type="X")
-            - "What protocols are in state Y?" → recall_my_protocols(state="Y")
-            - "Show me everything" → recall_my_protocols()
+            - Check everything: recall_my_protocols()
+            - Find specific type: recall_my_protocols(protocol_type="PurchaseOrder")
+            - Find by state: recall_my_protocols(state="Published")
         """
+        logger.info(f"🧭 recall_my_protocols CALLED by {agent_id} with type={protocol_type}, state={state}")
         protocols = memory.get_protocols(protocol_type=protocol_type, state=state)
+        logger.info(f"🧭 recall_my_protocols RESULT: {len(protocols)} protocols found")
         
         if not protocols:
             return {

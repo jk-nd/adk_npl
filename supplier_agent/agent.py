@@ -212,12 +212,17 @@ def _create_inventory_tools(inventory: Dict[str, Any]) -> List[FunctionTool]:
     """
     def list_products() -> Dict[str, Any]:
         """
-        List all products in your inventory.
+        📦 BUSINESS STATE: Check what you have to sell.
+        
+        🚨 CRITICAL: Use this to see what products you can offer!
+        
+        This shows your inventory - the products you have available to sell.
+        Check this when you have NO active protocols to see what you can offer.
         
         Returns:
             Dictionary with products and their details (name, price, stock)
         """
-        logger.info("Supplier agent querying inventory")
+        logger.info("📦 list_products() CALLED - Supplier checking inventory!")
         return {
             "success": True,
             "products": inventory.get("products", []),
