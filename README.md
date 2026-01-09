@@ -57,12 +57,27 @@ A demonstration of AI agents conducting business transactions via the **A2A Prot
 **1. Create `.env` file in project root:**
 ```bash
 cat > .env << 'EOF'
+# Google API Key (required for Chat API agents)
 GOOGLE_API_KEY=your_actual_api_key_here
+
+# Keycloak Admin Credentials
 KEYCLOAK_ADMIN=admin
 KEYCLOAK_ADMIN_PASSWORD=welcome
+
+# NPL Engine Configuration (for general NPL client usage)
+NPL_ENGINE_URL=http://localhost:12000
+NPL_KEYCLOAK_URL=http://localhost:11000
+NPL_KEYCLOAK_REALM=poc
+NPL_USERNAME=test_agent
+NPL_PASSWORD=welcome
+NPL_KEYCLOAK_CLIENT_ID=poc
+
+# Test User Password (for Keycloak provisioning)
 SEED_TEST_USERS_PASSWORD=Welcome123
 EOF
 ```
+
+**Note:** The demo agents use `purchasing` and `supplier` realms (hardcoded in `chat_api/main.py`), which are automatically created by the provisioning script. The NPL config variables above are for general NPL client usage and can use any realm.
 
 **2. Set up Python virtual environment:**
 ```bash
