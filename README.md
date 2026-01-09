@@ -47,16 +47,55 @@ A demonstration of AI agents conducting business transactions via the **A2A Prot
 ## 🚀 Quick Start
 
 ### Prerequisites
-- Python 3.10+ with virtual environment
-- Docker & Docker Compose
-- Node.js 18+ (for frontend development)
-- Google API Key for Gemini 2.0 (`GOOGLE_API_KEY` in `.env`)
+- **Python 3.10+** (check with `python3 --version`; if you have 3.9 or earlier, install Python 3.10+ via Homebrew: `brew install python@3.12`)
+- **Docker & Docker Compose** (Docker Desktop 4.41+ recommended)
+- **Node.js 18+** (check with `node --version`; install via Homebrew if needed: `brew install node`)
+- **Google API Key** for Gemini 2.0 (get from https://aistudio.google.com/app/apikey)
+
+### Initial Setup
+
+**1. Create `.env` file in project root:**
+```bash
+cat > .env << 'EOF'
+GOOGLE_API_KEY=your_actual_api_key_here
+KEYCLOAK_ADMIN=admin
+KEYCLOAK_ADMIN_PASSWORD=welcome
+SEED_TEST_USERS_PASSWORD=Welcome123
+EOF
+```
+
+**2. Set up Python virtual environment:**
+```bash
+# Use Python 3.10+ (check version first)
+python3 --version  # Should show 3.10, 3.11, or 3.12
+
+# If you only have Python 3.9, install Python 3.12:
+# brew install python@3.12
+# Then use: python3.12 -m venv .venv
+
+# Create and activate virtual environment
+python3 -m venv .venv
+source .venv/bin/activate
+
+# Install dependencies
+pip install --upgrade pip
+pip install -r requirements.txt
+```
+
+**3. Install frontend dependencies:**
+```bash
+cd frontend
+npm install
+cd ..
+```
 
 ### 1. Start Infrastructure
 ```bash
 ./scripts/setup-fresh.sh
 ```
-This starts: NPL Engine, Keycloak, PostgreSQL.
+This starts: NPL Engine, Keycloak, PostgreSQL, and provisions Keycloak realms.
+
+**Note:** The provisioning step creates the `purchasing` and `supplier` realms with users. This may take 2-3 minutes.
 
 ### 2. Start All Services (Recommended)
 
@@ -80,6 +119,26 @@ This single script will:
 **All services run in the foreground** - you'll see terminal output from the Chat API. Press `Ctrl+C` to stop all services.
 
 **Open the UI:** http://localhost:5173
+
+### Troubleshooting
+
+**Frontend redirects to Keycloak but doesn't load:**
+- The frontend uses `localhost:11000` for Keycloak (browsers can't resolve Docker hostnames)
+- If you had `/etc/hosts` entries mapping `keycloak` to `127.0.0.1` on another machine, you don't need them here
+- The code automatically converts any `keycloak` hostname to `localhost` for browser compatibility
+
+**Keycloak authentication fails:**
+- Ensure Keycloak realms are provisioned: `docker-compose up -d keycloak-provisioning`
+- Check realms exist: `curl http://localhost:11000/realms/purchasing`
+- Verify Keycloak is running: `docker-compose ps keycloak`
+
+**Python version errors:**
+- Ensure you're using Python 3.10+: `python3 --version`
+- If using Python 3.9, upgrade: `brew install python@3.12` then recreate venv with `python3.12 -m venv .venv`
+
+**Missing dependencies:**
+- Frontend: `cd frontend && npm install`
+- Python: `pip install -r requirements.txt`
 
 ### Service Ports
 

@@ -22,9 +22,10 @@
 
 import Keycloak from 'keycloak-js';
 
-const rawKeycloakUrl = import.meta.env.VITE_KEYCLOAK_URL || 'http://keycloak:11000';
-// Some environments override this to localhost; force the browser to use the same hostname Docker can reach for JWKS.
-const keycloakUrl = rawKeycloakUrl === 'http://localhost:11000' ? 'http://keycloak:11000' : rawKeycloakUrl;
+const rawKeycloakUrl = import.meta.env.VITE_KEYCLOAK_URL || 'http://localhost:11000';
+// Browser must use localhost (not Docker hostname 'keycloak') since browser can't resolve Docker internal DNS
+// Convert any 'keycloak' hostname to 'localhost' for browser compatibility
+const keycloakUrl = rawKeycloakUrl.replace('keycloak', 'localhost');
 const keycloakRealm = import.meta.env.VITE_KEYCLOAK_REALM || 'purchasing';
 const keycloakClientId = import.meta.env.VITE_KEYCLOAK_CLIENT_ID || 'purchasing';
 
