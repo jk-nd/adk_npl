@@ -12,7 +12,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
 # Parse arguments
-CLEAN_DB=false
+CLEAN_DB=false  # Default: keep existing database
 if [ "$1" = "--clean" ]; then
     CLEAN_DB=true
 fi
@@ -95,6 +95,54 @@ if ! curl -s http://localhost:11000/health > /dev/null 2>&1; then
     echo -e "${YELLOW}⚠️  Keycloak not running (may be optional)${NC}"
 else
     echo -e "${GREEN}✅ Keycloak is running${NC}"
+    
+    # Verify Keycloak users are provisioned by testing authentication
+    echo -e "${YELLOW}   Verifying user provisioning...${NC}"
+    # Load password from .env if it exists
+    if [ -f .env ]; then
+        export $(grep -v '^#' .env | grep SEED_TEST_USERS_PASSWORD | xargs)
+    fi
+    KEYCLOAK_PASSWORD="${SEED_TEST_USERS_PASSWORD:-Welcome123}"
+    
+    # Test purchasing_agent authentication
+    PURCHASING_AUTH=$(curl -s -X POST http://localhost:11000/realms/purchasing/protocol/openid-connect/token \
+        -d "grant_type=password" \
+        -d "client_id=purchasing" \
+        -d "username=purchasing_agent" \
+        -d "password=${KEYCLOAK_PASSWORD}" \
+        -H "Content-Type: application/x-www-form-urlencoded" 2>/dev/null)
+    
+    # Test supplier_agent authentication
+    SUPPLIER_AUTH=$(curl -s -X POST http://localhost:11000/realms/supplier/protocol/openid-connect/token \
+        -d "grant_type=password" \
+        -d "client_id=supplier" \
+        -d "username=supplier_agent" \
+        -d "password=${KEYCLOAK_PASSWORD}" \
+        -H "Content-Type: application/x-www-form-urlencoded" 2>/dev/null)
+    
+    # Test approver authentication
+    APPROVER_AUTH=$(curl -s -X POST http://localhost:11000/realms/purchasing/protocol/openid-connect/token \
+        -d "grant_type=password" \
+        -d "client_id=purchasing" \
+        -d "username=approver" \
+        -d "password=${KEYCLOAK_PASSWORD}" \
+        -H "Content-Type: application/x-www-form-urlencoded" 2>/dev/null)
+    
+    if echo "$PURCHASING_AUTH" | grep -q "access_token" && \
+       echo "$SUPPLIER_AUTH" | grep -q "access_token" && \
+       echo "$APPROVER_AUTH" | grep -q "access_token"; then
+        echo -e "${GREEN}   ✅ All Keycloak users are provisioned and can authenticate${NC}"
+    else
+        echo -e "${RED}   ❌ Keycloak user provisioning incomplete or failed!${NC}"
+        echo -e "${YELLOW}   Please run ./scripts/setup-fresh.sh to provision users${NC}"
+        echo ""
+        echo -e "${YELLOW}   Authentication test results:${NC}"
+        echo "$PURCHASING_AUTH" | grep -q "access_token" && echo "   ✅ purchasing_agent" || echo "   ❌ purchasing_agent"
+        echo "$SUPPLIER_AUTH" | grep -q "access_token" && echo "   ✅ supplier_agent" || echo "   ❌ supplier_agent"
+        echo "$APPROVER_AUTH" | grep -q "access_token" && echo "   ✅ approver" || echo "   ❌ approver"
+        echo ""
+        exit 1
+    fi
 fi
 echo ""
 
@@ -111,13 +159,26 @@ cleanup() {
     echo ""
     echo -e "${YELLOW}🛑 Shutting down services...${NC}"
     pkill -f "activity_api/main.py" 2>/dev/null || true
+    pkill -f "uvicorn.*8001" 2>/dev/null || true
     pkill -f "chat_api/main.py" 2>/dev/null || true
     pkill -f "vite" 2>/dev/null || true
+    # Clean up ports in case processes didn't exit cleanly
+    lsof -ti :8001 | xargs kill -9 2>/dev/null || true
+    lsof -ti :8002 | xargs kill -9 2>/dev/null || true
+    lsof -ti :8010 | xargs kill -9 2>/dev/null || true
+    lsof -ti :8011 | xargs kill -9 2>/dev/null || true
+    lsof -ti :5173 | xargs kill -9 2>/dev/null || true
     echo -e "${GREEN}✅ Cleanup complete${NC}"
     exit 0
 }
 
 trap cleanup SIGINT SIGTERM
+
+# Clean up any existing Activity API processes before starting
+echo -e "${YELLOW}🧹 Cleaning up any existing Activity API processes...${NC}"
+pkill -f "activity_api/main.py" 2>/dev/null || true
+lsof -ti :8002 | xargs kill -9 2>/dev/null || true
+sleep 1  # Give processes time to fully terminate
 
 # Start Activity API in background (but capture output)
 echo -e "${BLUE}📊 Starting Activity API (port 8002)...${NC}"
@@ -125,16 +186,37 @@ cd activity_api
 python3 main.py > ../logs/activity_api.log 2>&1 &
 ACTIVITY_API_PID=$!
 cd ..
-sleep 2
 
-# Check if Activity API started
-if ! curl -s http://localhost:8002/health > /dev/null 2>&1; then
-    echo -e "${RED}❌ Activity API failed to start${NC}"
-    tail -20 logs/activity_api.log
+# Wait for Activity API to start with retry logic
+echo -n "   Waiting for Activity API"
+ACTIVITY_API_READY=0
+for i in {1..15}; do
+    if curl -s http://localhost:8002/health > /dev/null 2>&1; then
+        echo ""
+        echo -e "${GREEN}✅ Activity API running on http://localhost:8002${NC}"
+        ACTIVITY_API_READY=1
+        break
+    fi
+    if [ $((i % 3)) -eq 0 ]; then
+        echo -n "."
+    fi
+    sleep 1
+done
+
+if [ $ACTIVITY_API_READY -eq 0 ]; then
+    echo ""
+    echo -e "${RED}❌ Activity API failed to start after 15 seconds${NC}"
+    echo -e "${YELLOW}   Checking logs...${NC}"
+    tail -30 logs/activity_api.log
     exit 1
 fi
-echo -e "${GREEN}✅ Activity API running on http://localhost:8002${NC}"
 echo ""
+
+# Clean up any existing Frontend processes before starting
+echo -e "${YELLOW}🧹 Cleaning up any existing Frontend processes...${NC}"
+pkill -f "vite" 2>/dev/null || true
+lsof -ti :5173 | xargs kill -9 2>/dev/null || true
+sleep 1  # Give processes time to fully terminate
 
 # Start Frontend in background (but capture output)
 echo -e "${BLUE}🎨 Starting Frontend (port 5173)...${NC}"
@@ -142,15 +224,38 @@ cd frontend
 npm run dev > ../logs/frontend.log 2>&1 &
 FRONTEND_PID=$!
 cd ..
-sleep 3
 
-# Check if Frontend started
-if ! curl -s http://localhost:5173 > /dev/null 2>&1; then
-    echo -e "${YELLOW}⚠️  Frontend may still be starting...${NC}"
-else
-    echo -e "${GREEN}✅ Frontend running on http://localhost:5173${NC}"
+# Wait for Frontend to start with retry logic
+echo -n "   Waiting for Frontend"
+FRONTEND_READY=0
+for i in {1..20}; do
+    if curl -s http://localhost:5173 > /dev/null 2>&1; then
+        echo ""
+        echo -e "${GREEN}✅ Frontend running on http://localhost:5173${NC}"
+        FRONTEND_READY=1
+        break
+    fi
+    if [ $((i % 3)) -eq 0 ]; then
+        echo -n "."
+    fi
+    sleep 1
+done
+
+if [ $FRONTEND_READY -eq 0 ]; then
+    echo ""
+    echo -e "${YELLOW}⚠️  Frontend may still be starting (check logs/frontend.log)${NC}"
 fi
 echo ""
+
+# Clean up any existing Chat API and A2A server processes before starting
+echo -e "${YELLOW}🧹 Cleaning up any existing Chat API and A2A server processes...${NC}"
+pkill -f "uvicorn.*8001" 2>/dev/null || true
+pkill -f "chat_api/main.py" 2>/dev/null || true
+# A2A servers run in threads, but we can kill any uvicorn processes that might be holding the ports
+lsof -ti :8001 | xargs kill -9 2>/dev/null || true
+lsof -ti :8010 | xargs kill -9 2>/dev/null || true
+lsof -ti :8011 | xargs kill -9 2>/dev/null || true
+sleep 2  # Give processes time to fully terminate and ports to be released
 
 # Start Chat API (main demo) in foreground - this is the main process
 echo -e "${BLUE}🤖 Starting Chat API with A2A Agents (port 8001)...${NC}"
