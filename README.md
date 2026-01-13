@@ -124,7 +124,9 @@ This starts: NPL Engine, Keycloak, PostgreSQL, and provisions Keycloak realms.
 
 This single script will:
 - ✅ Check prerequisites (NPL Engine, Keycloak)
+- ✅ Verify Keycloak user provisioning (tests authentication for all required users)
 - ✅ Optionally reset NPL database (`--clean` flag)
+- ✅ Clean up any existing processes on required ports
 - ✅ Start Activity API (port 8002)
 - ✅ Start Frontend (port 5173)
 - ✅ Start Chat API with A2A Agents (port 8001)
@@ -143,6 +145,8 @@ This single script will:
 - The code automatically converts any `keycloak` hostname to `localhost` for browser compatibility
 
 **Keycloak authentication fails:**
+- The script now automatically verifies user provisioning before starting
+- If verification fails, run `./scripts/setup-fresh.sh` to provision users
 - Ensure Keycloak realms are provisioned: `docker-compose up -d keycloak-provisioning`
 - Check realms exist: `curl http://localhost:11000/realms/purchasing`
 - Verify Keycloak is running: `docker-compose ps keycloak`
