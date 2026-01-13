@@ -140,9 +140,10 @@ This single script will:
 ### Troubleshooting
 
 **Frontend redirects to Keycloak but doesn't load:**
-- The frontend uses `localhost:11000` for Keycloak (browsers can't resolve Docker hostnames)
-- If you had `/etc/hosts` entries mapping `keycloak` to `127.0.0.1` on another machine, you don't need them here
-- The code automatically converts any `keycloak` hostname to `localhost` for browser compatibility
+- The frontend uses `http://keycloak:11000` for Keycloak authentication
+- **Required:** Add `/etc/hosts` entry: `127.0.0.1 keycloak`
+- This ensures the JWT token issuer matches `ENGINE_ALLOWED_ISSUERS` in docker-compose.yml
+- Without this entry, you'll get 401 Unauthorized errors from the NPL Engine
 
 **Keycloak authentication fails:**
 - The script now automatically verifies user provisioning before starting

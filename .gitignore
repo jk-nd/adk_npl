@@ -47,3 +47,8 @@ frontend/openapi-ts-error-*.log
 # OS
 .DS_Store
 Thumbs.db
+
+# Personal notes (not for GitHub)
+docs/MEDIUM_ARTICLE_OUTLINE.md
+docs/EXEC_SUMMARY.md
+docs/EXECUTIVE_REPORT.md

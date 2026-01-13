@@ -50,6 +50,9 @@ export function usePendingApprovals(pollInterval: number = 3000) {
               pageSize: 50,
             },
           },
+          headers: {
+            'X-Party': 'approver',
+          },
         });
 
         if (!error && data?.items) {
