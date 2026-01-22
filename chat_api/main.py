@@ -53,14 +53,139 @@ from adk_npl.protocol_memory import (
     create_memory_tools,
 )
 from adk_npl.partner_memory import PartnerMemory, create_partner_memory_tools
-from adk_npl.tools import create_identity_tool
 from adk_npl.inventory_tools import SupplierInventory, BuyerShoppingList
 from adk_npl.erp_sync import ErpSyncService
 from supplier_agent.agent import create_supplier_agent
 from purchasing_agent.agent import create_purchasing_agent
 
-logging.basicConfig(level=logging.INFO)
+# =============================================================================
+# ENHANCED LOGGING CONFIGURATION
+# =============================================================================
+# Enable DEBUG logging for adk_npl modules to see what's actually being used
+
+# Create logs directory
+Path("logs").mkdir(exist_ok=True)
+
+# Configure root logger with both console and file handlers
+log_formatter = logging.Formatter(
+    '%(asctime)s | %(levelname)-8s | %(name)-30s | %(message)s',
+    datefmt='%H:%M:%S'
+)
+
+# Console handler - INFO level for readability
+console_handler = logging.StreamHandler()
+console_handler.setLevel(logging.INFO)
+console_handler.setFormatter(log_formatter)
+
+# File handler - DEBUG level for full detail
+file_handler = logging.FileHandler(f'logs/debug_{datetime.now().strftime("%Y%m%d_%H%M%S")}.log')
+file_handler.setLevel(logging.DEBUG)
+file_handler.setFormatter(log_formatter)
+
+# Configure root logger
+logging.basicConfig(
+    level=logging.DEBUG,
+    handlers=[console_handler, file_handler]
+)
+
+# Set specific module log levels for comprehensive tracing
+logging.getLogger('adk_npl').setLevel(logging.DEBUG)
+logging.getLogger('adk_npl.tools').setLevel(logging.DEBUG)
+logging.getLogger('adk_npl.agent_factory').setLevel(logging.DEBUG)
+logging.getLogger('adk_npl.client').setLevel(logging.DEBUG)
+logging.getLogger('adk_npl.protocol_memory').setLevel(logging.DEBUG)
+logging.getLogger('adk_npl.diagram_generator').setLevel(logging.DEBUG)
+
+# Reduce noise from external libraries
+logging.getLogger('httpx').setLevel(logging.WARNING)
+logging.getLogger('httpcore').setLevel(logging.WARNING)
+logging.getLogger('uvicorn').setLevel(logging.INFO)
+logging.getLogger('uvicorn.access').setLevel(logging.WARNING)
+
 logger = logging.getLogger(__name__)
+
+# =============================================================================
+# TOOL USAGE TRACKER - Captures which tools are actually called
+# =============================================================================
+class ToolUsageTracker:
+    """Track which tools are called and how often during the session."""
+    
+    def __init__(self):
+        self.tool_calls: Dict[str, int] = {}
+        self.tool_errors: Dict[str, int] = {}
+        self.tool_latencies: Dict[str, List[float]] = {}
+        self.unused_tools: set = set()
+        self.start_time = time.time()
+    
+    def record_call(self, tool_name: str, latency: float = 0.0, error: bool = False):
+        """Record a tool call."""
+        if tool_name not in self.tool_calls:
+            self.tool_calls[tool_name] = 0
+            self.tool_latencies[tool_name] = []
+        self.tool_calls[tool_name] += 1
+        self.tool_latencies[tool_name].append(latency)
+        if error:
+            self.tool_errors[tool_name] = self.tool_errors.get(tool_name, 0) + 1
+    
+    def set_available_tools(self, tool_names: List[str]):
+        """Set the list of available tools for tracking unused ones."""
+        self.unused_tools = set(tool_names)
+    
+    def mark_used(self, tool_name: str):
+        """Mark a tool as used."""
+        self.unused_tools.discard(tool_name)
+    
+    def get_summary(self) -> Dict:
+        """Get summary of tool usage."""
+        runtime = time.time() - self.start_time
+        
+        # Sort by call count
+        sorted_tools = sorted(self.tool_calls.items(), key=lambda x: x[1], reverse=True)
+        
+        return {
+            "runtime_seconds": round(runtime, 1),
+            "total_tool_calls": sum(self.tool_calls.values()),
+            "unique_tools_used": len(self.tool_calls),
+            "tools_never_used": list(self.unused_tools),
+            "tools_never_used_count": len(self.unused_tools),
+            "top_tools": [
+                {
+                    "name": name,
+                    "calls": count,
+                    "errors": self.tool_errors.get(name, 0),
+                    "avg_latency_ms": round(sum(self.tool_latencies[name]) / len(self.tool_latencies[name]) * 1000, 1) if self.tool_latencies.get(name) else 0
+                }
+                for name, count in sorted_tools[:15]
+            ],
+            "error_prone_tools": [
+                {"name": name, "errors": count, "error_rate": f"{count/self.tool_calls.get(name, 1)*100:.1f}%"}
+                for name, count in sorted(self.tool_errors.items(), key=lambda x: x[1], reverse=True)[:5]
+            ]
+        }
+    
+    def print_summary(self):
+        """Print a formatted summary to the console."""
+        summary = self.get_summary()
+        logger.info("=" * 70)
+        logger.info("📊 TOOL USAGE SUMMARY")
+        logger.info("=" * 70)
+        logger.info(f"Runtime: {summary['runtime_seconds']}s | Total calls: {summary['total_tool_calls']} | Unique tools: {summary['unique_tools_used']}")
+        logger.info("")
+        logger.info("🔧 TOP TOOLS (by call count):")
+        for t in summary['top_tools'][:10]:
+            error_str = f" ⚠️ {t['errors']} errors" if t['errors'] > 0 else ""
+            logger.info(f"   {t['calls']:3d}x {t['name']}{error_str}")
+        logger.info("")
+        if summary['tools_never_used']:
+            logger.info(f"❌ UNUSED TOOLS ({summary['tools_never_used_count']}):")
+            for name in summary['tools_never_used'][:10]:
+                logger.info(f"   - {name}")
+            if summary['tools_never_used_count'] > 10:
+                logger.info(f"   ... and {summary['tools_never_used_count'] - 10} more")
+        logger.info("=" * 70)
+
+# Global tracker instance
+tool_tracker = ToolUsageTracker()
 
 # Global notification listeners (one per party)
 notification_listener_tasks: Dict[str, asyncio.Task] = {}
@@ -278,8 +403,8 @@ def create_a2a_message_tool(target_port: int, target_name: str, from_name: str, 
         )
 
         try:
-            # Turn-based: send and WAIT for response (60s timeout - agents need time for memory checks + LLM calls)
-            async with httpx.AsyncClient(timeout=60.0) as client:
+            # Turn-based: send and WAIT for response (120s timeout - agents need time for: memory checks + tool discovery + planning + LLM calls + NPL API calls)
+            async with httpx.AsyncClient(timeout=120.0) as client:
                 msg_id = str(int(time.time() * 1000))
                 payload = {
                     "jsonrpc": "2.0",
@@ -842,6 +967,12 @@ async def startup():
     # Create the SAME agents from the workflow, with A2A messaging tools added
     logger.info("Creating enterprise-grade agents with ADK integration...")
     
+    # Create tool usage tracking callback
+    def track_tool_usage(tool_name: str, latency: float, is_error: bool):
+        """Callback to track tool usage in the global tracker."""
+        tool_tracker.record_call(tool_name, latency, is_error)
+        tool_tracker.mark_used(tool_name)
+    
     # Create base agents using EnterpriseAgentFactory
     buyer_result = await create_purchasing_agent(
         config=buyer_config,
@@ -849,9 +980,10 @@ async def startup():
         shopping_list=buyer_shopping_list.data,
         budget=200000.0,
         requirements="Purchase items from shopping list",
-        enable_reflection=False,  # Temporarily disabled to reduce LLM calls
-        enable_planning=False,    # Temporarily disabled to reduce LLM calls
-        enable_runtime_validation=True
+        enable_reflection=False,  # Disabled - error guidance in callbacks is sufficient
+        enable_planning=True,     # Required - prevents parallel tool calls
+        enable_runtime_validation=True,
+        tool_usage_callback=track_tool_usage
     )
     buyer_agent = buyer_result["agent"]
     buyer_plugins = buyer_result["plugins"]
@@ -862,9 +994,10 @@ async def startup():
         session_service=session_service,
         inventory=supplier_inventory.data,
         min_price=1000.0,
-        enable_reflection=False,  # Temporarily disabled to reduce LLM calls
-        enable_planning=False,    # Temporarily disabled to reduce LLM calls
-        enable_runtime_validation=True
+        enable_reflection=False,  # Disabled - error guidance in callbacks is sufficient
+        enable_planning=True,     # Required - prevents parallel tool calls
+        enable_runtime_validation=True,
+        tool_usage_callback=track_tool_usage
     )
     supplier_agent = supplier_result["agent"]
     supplier_plugins = supplier_result["plugins"]
@@ -901,6 +1034,14 @@ async def startup():
         supplier_agent.tools.append(tool)
     
     logger.info(f"✅ Added {len(partner_tools)} partner memory tools to both agents")
+    
+    # Track all available tools for usage analysis
+    all_tool_names = []
+    for tool in buyer_agent.tools:
+        tool_name = getattr(tool, 'name', getattr(tool, '__name__', str(tool)))
+        all_tool_names.append(tool_name)
+    tool_tracker.set_available_tools(all_tool_names)
+    logger.info(f"📊 Tracking {len(all_tool_names)} tools for usage analysis")
     
     agents["supplier"] = supplier_agent
     agents["buyer"] = buyer_agent
@@ -1222,6 +1363,29 @@ async def health_check():
     }
 
 
+@app.get("/tool-usage")
+async def get_tool_usage():
+    """Get summary of tool usage for analysis."""
+    summary = tool_tracker.get_summary()
+    
+    # Also get metrics from the metrics collector
+    metrics = get_metrics()
+    metrics_summary = metrics.get_summary() if hasattr(metrics, 'get_summary') else {}
+    
+    return {
+        "tool_usage": summary,
+        "metrics": metrics_summary,
+        "activity_log": str(activity_logger.log_file) if hasattr(activity_logger, 'log_file') else None
+    }
+
+
+@app.get("/tool-usage/print")
+async def print_tool_usage():
+    """Print tool usage summary to console and return it."""
+    tool_tracker.print_summary()
+    return tool_tracker.get_summary()
+
+
 @app.post("/restart-session")
 async def restart_session():
     """
@@ -1333,6 +1497,21 @@ async def reset_agents():
         return {"status": "error", "message": str(e)}
 
 
+@app.on_event("shutdown")
+async def on_shutdown():
+    """Print tool usage summary when server shuts down."""
+    logger.info("")
+    logger.info("🛑 Server shutting down - printing final summary...")
+    tool_tracker.print_summary()
+    
+    # Also save summary to file
+    summary = tool_tracker.get_summary()
+    summary_file = Path("logs") / f"tool_usage_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+    with open(summary_file, 'w') as f:
+        json.dump(summary, f, indent=2)
+    logger.info(f"📊 Tool usage saved to: {summary_file}")
+
+
 @app.post("/shutdown")
 async def shutdown():
     """
@@ -1343,6 +1522,9 @@ async def shutdown():
     import signal
     
     logger.info("🛑 Shutdown requested via API")
+    
+    # Print tool usage summary before shutdown
+    tool_tracker.print_summary()
     
     # Cancel notification listeners
     global notification_listener_tasks

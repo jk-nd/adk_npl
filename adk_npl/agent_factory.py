@@ -35,6 +35,7 @@ from .protocol_memory import NPLProtocolMemory, create_memory_tools
 from .agent_logic import GLOBAL_AGENT_RULES
 from .docstring_trimmer import trim_tool_docstrings
 from .monitoring import get_metrics
+from .diagram_generator import generate_all_workflow_guides
 
 logger = logging.getLogger(__name__)
 
@@ -383,7 +384,8 @@ class EnterpriseAgentFactory:
         max_retries: int = 3,
         max_tool_calls_per_turn: int = 50,  # High limit - NPL tools don't consume LLM quota
         custom_instructions: Optional[str] = None,
-        output_schema: Optional[type] = None
+        output_schema: Optional[type] = None,
+        tool_usage_callback: Optional[Callable[[str, float, bool], None]] = None
     ) -> LlmAgent:
         """
         Create an enterprise-grade agent with full ADK integration.
@@ -407,6 +409,7 @@ class EnterpriseAgentFactory:
             max_retries: Max retries for ReflectAndRetryToolPlugin
             max_tool_calls_per_turn: Safety limit to prevent infinite loops (not for rate limiting - NPL tools are cheap)
             custom_instructions: Custom instructions (appended to base)
+            tool_usage_callback: Optional callback(tool_name, latency, is_error) for external tracking
         
         Returns:
             Configured LlmAgent instance
@@ -455,18 +458,8 @@ class EnterpriseAgentFactory:
         # Add memory tools
         memory_tools = create_memory_tools(agent_id=agent_id)
         
-        # Add identity tool (for agents to discover their own party claims)
-        from .tools import create_identity_tool
-        identity_tool = create_identity_tool(self.npl_config)
-        
-        # Add highly-discoverable orientation tool (GENERIC - works with any NPL)
-        what_can_i_do_tool = self._create_what_can_i_do_tool(
-            agent_id=agent_id,
-            packages=packages
-        )
-        
         # Combine all tools
-        all_tools = npl_tools + memory_tools + [identity_tool, what_can_i_do_tool]
+        all_tools = npl_tools + memory_tools
         if additional_tools:
             all_tools.extend(additional_tools)
         
@@ -481,10 +474,11 @@ class EnterpriseAgentFactory:
         tool_names = [getattr(t, 'name', getattr(t, '__name__', str(t))) for t in all_tools]
         logger.info(f"📋 Available tools: {', '.join(sorted(tool_names))}")
         
-        # Build instructions
+        # Build instructions (with workflow context from .npl files)
         instructions = self._build_instructions(
             agent_id=agent_id,
             objective=objective,
+            packages=packages,
             custom_instructions=custom_instructions
         )
         
@@ -519,13 +513,16 @@ class EnterpriseAgentFactory:
             prev = tool_call_counter["count"]
             tool_call_counter["count"] = 0
             tool_call_counter["recalled"] = False  # Reset orientation flag for new turn
+            tool_call_counter["last_tool"] = None  # Reset duplicate call tracking
             if prev > tool_call_counter["max"]:
                 logger.info(f"🔄 {agent_id} counter reset: was blocked at {prev}, can now resume")
         
         def before_tool_callback(tool, args, tool_context=None, **kwargs):
             """Enforce tool call limit per turn using ADK callback."""
             import time
+            from .activity_logger import get_activity_logger
             metrics = get_metrics()
+            activity_logger = get_activity_logger()
             
             tool_call_counter["count"] += 1
             tool_call_counter["start_time"] = time.time()
@@ -533,7 +530,30 @@ class EnterpriseAgentFactory:
             max_calls = tool_call_counter["max"]
             
             tool_name = getattr(tool, 'name', 'unknown')
-            logger.debug(f"🔧 Tool call #{count}/{max_calls}: {tool_name}")
+            logger.info(f"🔧 [{agent_id}] Tool #{count}/{max_calls}: {tool_name}")
+            
+            # 🚫 PREVENT DUPLICATE SEQUENTIAL CALLS: Block if calling the same tool twice in a row
+            last_tool = tool_call_counter.get("last_tool")
+            if last_tool == tool_name and tool_name in ['recall_my_protocols', 'recall_partner_identity']:
+                logger.warning(f"⚠️ Agent {agent_id} trying to call {tool_name} twice in a row")
+                metrics.increment("agent.duplicate_calls.blocked", agent=agent_id, tool=tool_name)
+                return {
+                    "error": (
+                        f"🛑 DUPLICATE CALL BLOCKED: You just called `{tool_name}()` and got a result. "
+                        f"Don't call it again immediately - use the result you already received. "
+                        f"\n\n"
+                        f"**Next step:** Review the result from your previous call and take appropriate action."
+                    )
+                }
+            tool_call_counter["last_tool"] = tool_name
+            
+            # Log tool call with args for comprehensive tracking
+            activity_logger.log_tool_call(
+                actor=agent_id,
+                tool_name=tool_name,
+                args=args if isinstance(args, dict) else {"raw": str(args)[:200]},
+                success=True  # Will be updated in after_tool_callback if it fails
+            )
             
             # Record metric for tool call start
             metrics.increment("agent.tool_calls.started", agent=agent_id, tool=tool_name)
@@ -590,7 +610,10 @@ class EnterpriseAgentFactory:
         def after_tool_callback(tool, args, tool_context=None, result=None, **kwargs):
             """Log tool results and record metrics."""
             import time
+            from .activity_logger import get_activity_logger
+            from .protocol_memory import auto_track_result
             metrics = get_metrics()
+            activity_logger = get_activity_logger()
             
             tool_name = getattr(tool, 'name', 'unknown')
             
@@ -600,7 +623,43 @@ class EnterpriseAgentFactory:
             metrics.record_latency("agent.tool_calls.latency", latency, agent=agent_id, tool=tool_name)
             metrics.increment("agent.tool_calls.completed", agent=agent_id, tool=tool_name)
             
-            logger.debug(f"✅ Tool completed: {tool_name} ({latency*1000:.1f}ms)")
+            # Check if result indicates an error
+            is_error = isinstance(result, dict) and (result.get("error") or result.get("success") == False)
+            
+            # Call external tool usage tracker if provided
+            if tool_usage_callback:
+                try:
+                    tool_usage_callback(tool_name, latency, is_error)
+                except Exception as e:
+                    logger.debug(f"Tool usage callback error: {e}")
+            
+            # Auto-track NPL protocol results for memory
+            # This catches both create and action calls (submit, publish, accept, etc.)
+            if tool_name.startswith("npl_") and isinstance(result, dict) and not is_error:
+                try:
+                    # Extract protocol type from tool name: npl_commerce_PurchaseOrder_create -> PurchaseOrder
+                    parts = tool_name.split("_")
+                    if len(parts) >= 3:
+                        protocol_type = parts[2]  # e.g., "PurchaseOrder", "Offer"
+                        # Get protocol memory for this agent
+                        memory = NPLProtocolMemory.get_instance(agent_id)
+                        # Auto-track if result has protocol data
+                        auto_track_result(memory, protocol_type, result, role="owner")
+                        logger.debug(f"📝 Auto-tracked {protocol_type} from {tool_name}")
+                except Exception as e:
+                    # Don't fail the callback if tracking fails
+                    logger.debug(f"Protocol auto-tracking failed: {e}")
+            
+            # Log completion with result preview
+            result_preview = None
+            if result:
+                result_str = str(result)
+                result_preview = result_str[:200] if len(result_str) > 200 else result_str
+            
+            logger.info(f"✅ [{agent_id}] Tool completed: {tool_name} ({latency*1000:.0f}ms){' ⚠️ ERROR' if is_error else ''}")
+            if is_error:
+                logger.warning(f"   Tool error result: {result_preview}")
+            
             return None  # Use original result
         
         def on_tool_error_callback(tool, args, tool_context=None, exception=None, **kwargs):
@@ -613,7 +672,9 @@ class EnterpriseAgentFactory:
             - Permission errors: Don't retry, need different approach
             """
             import traceback
+            from .activity_logger import get_activity_logger
             metrics = get_metrics()
+            activity_logger = get_activity_logger()
             
             tool_name = getattr(tool, 'name', 'unknown')
             error_msg = str(exception) if exception else "Unknown error"
@@ -623,7 +684,16 @@ class EnterpriseAgentFactory:
             metrics.increment("agent.tool_calls.errors", agent=agent_id, tool=tool_name, error_type=error_type)
             metrics.record_error(error_type, error_msg[:200], agent=agent_id, tool=tool_name)
             
-            logger.error(f"❌ Tool error in {tool_name}: {error_type}: {error_msg}")
+            # Log to activity logger for comprehensive tracking
+            activity_logger.log_tool_call(
+                actor=agent_id,
+                tool_name=tool_name,
+                args=args if isinstance(args, dict) else {"raw": str(args)[:200]},
+                result={"error": error_type, "message": error_msg[:200]},
+                success=False
+            )
+            
+            logger.error(f"❌ [{agent_id}] Tool EXCEPTION: {tool_name} - {error_type}: {error_msg[:100]}")
             
             # Categorize the error for LLM guidance
             if "400" in error_msg or "validation" in error_msg.lower():
@@ -836,194 +906,117 @@ class EnterpriseAgentFactory:
         
         return None
     
-    def _create_what_can_i_do_tool(
-        self,
-        agent_id: str,
-        packages: List[str]
-    ) -> FunctionTool:
-        """
-        Create a highly-discoverable orientation tool that shows ALL available actions.
-        
-        This is GENERIC - works with any NPL protocols in any domain.
-        It queries NPL dynamically, so it adapts to protocol changes automatically.
-        """
-        def what_can_i_do(include_details: bool = False) -> Dict[str, Any]:
-            """
-            🧭 ORIENTATION: See ALL available actions across ALL your protocols.
-            
-            Call this when:
-            - You receive a notification
-            - You start a new turn
-            - You're not sure what to do next
-            
-            This tool queries NPL (source of truth) to show you what actions
-            are available RIGHT NOW on every protocol you're tracking.
-            
-            Args:
-                include_details: Include full action details (default: False)
-            
-            Returns:
-                Summary of protocols and available actions
-                
-            Example Response:
-                {
-                  "protocols": [
-                    {
-                      "type": "PurchaseOrder",
-                      "id": "abc-123",
-                      "state": "Approved",
-                      "available_actions": ["placeOrder", "cancelOrder"]
-                    }
-                  ],
-                  "guidance": "Pick ONE action and execute it"
-                }
-            """
-            try:
-                # Get all tracked protocols from memory
-                memory = NPLProtocolMemory.get_instance(agent_id)
-                all_protocols = memory.get_protocols()
-                
-                if not all_protocols:
-                    return {
-                        "success": True,
-                        "message": "No protocols in memory yet. Start by creating one or responding to a notification.",
-                        "protocols": [],
-                        "hint": "Use list_shopping_items() or check_inventory() to see what you need to work on"
-                    }
-                
-                results = []
-                
-                # Process each tracked protocol
-                for protocol_entry in all_protocols:
-                    protocol_type = protocol_entry["protocol_type"]
-                    instance_id = protocol_entry["instance_id"]
-                    
-                    # Determine package (try all packages the agent knows about)
-                    found = False
-                    for package in packages:
-                        try:
-                            # Query NPL for current state
-                            instance = self._npl_client.get_instance(
-                                package=package,
-                                protocol_name=protocol_type,
-                                instance_id=instance_id
-                            )
-                            
-                            current_state = instance.get("@state", "unknown")
-                            
-                            # Get metadata from NPL source (if available)
-                            from .tools import NPLToolGenerator
-                            metadata = NPLToolGenerator._get_protocol_metadata(
-                                NPLToolGenerator(self._npl_client, memory),
-                                package,
-                                protocol_type
-                            )
-                            
-                            # Extract available actions from metadata
-                            available_actions = []
-                            if metadata:
-                                permissions = metadata.get('permissions', [])
-                                for perm in permissions:
-                                    source_states = perm.get('source_states', [])
-                                    if current_state in source_states or not source_states:
-                                        action_info = {
-                                            "action": perm['action'],
-                                            "leads_to": perm.get('target_states', [current_state])[0] if perm.get('target_states') else current_state,
-                                            "tool_call": f"npl_{package}_{protocol_type}_{perm['action']}(instance_id='{instance_id}')"
-                                        }
-                                        available_actions.append(action_info)
-                            
-                            # Build protocol summary
-                            protocol_summary = {
-                                "protocol_type": protocol_type,
-                                "package": package,
-                                "instance_id": instance_id,
-                                "current_state": current_state,
-                                "available_actions": [a["action"] for a in available_actions] if not include_details else available_actions,
-                                "is_final": metadata.get('states', {}).get(current_state) == 'final' if metadata else False
-                            }
-                            
-                            results.append(protocol_summary)
-                            found = True
-                            break  # Found it in this package
-                            
-                        except Exception as e:
-                            # Try next package
-                            continue
-                    
-                    if not found:
-                        # Could not find protocol in any package
-                        results.append({
-                            "protocol_type": protocol_type,
-                            "instance_id": instance_id,
-                            "error": f"Could not retrieve protocol (may be in different package)",
-                            "suggestion": f"Try recall_my_protocols() to refresh memory"
-                        })
-                
-                # Separate in-progress from final protocols
-                in_progress = [p for p in results if not p.get('is_final') and not p.get('error')]
-                completed = [p for p in results if p.get('is_final')]
-                
-                return {
-                    "success": True,
-                    "total_protocols": len(results),
-                    "in_progress": in_progress,
-                    "completed": completed,
-                    "guidance": (
-                        "🎯 NEXT STEPS:\n"
-                        "1. Focus on 'in_progress' protocols first\n"
-                        "2. Pick ONE action from 'available_actions'\n"
-                        "3. Execute it: npl_{package}_{type}_{action}(instance_id='...')\n"
-                        "4. STOP and wait for response"
-                    ) if in_progress else (
-                        "✅ All protocols complete! Start a new transaction if needed."
-                    )
-                }
-                
-            except Exception as e:
-                logger.error(f"Error in what_can_i_do: {e}", exc_info=True)
-                return {
-                    "success": False,
-                    "error": str(e),
-                    "fallback": "Try: recall_my_protocols() then npl_*_next_actions(instance_id='...') manually"
-                }
-        
-        return FunctionTool(what_can_i_do, require_confirmation=False)
-    
     def _build_instructions(
         self,
         agent_id: str,
         objective: str,
-        custom_instructions: Optional[str]
+        packages: Optional[List[str]] = None,
+        custom_instructions: Optional[str] = None
     ) -> str:
         """
-        Build agent instructions.
+        Build agent instructions with workflow context from NPL sources.
         
         Combines:
         - GLOBAL_AGENT_RULES (critical turn limits, memory usage, termination)
+        - Workflow context from .npl files (state machines, transitions, party roles)
         - Objective-specific guidance
+        - Current date context (critical for temporal validity)
         - Custom instructions
         
         Args:
             agent_id: Agent identifier
             objective: Agent objective
+            packages: NPL packages to generate workflow context from
             custom_instructions: Custom instructions
         
         Returns:
             Complete instruction string
         """
+        from datetime import datetime, timedelta
+        
         # Get aligned party roles for this objective
         aligned_parties = get_aligned_parties(objective)
         party_list = ', '.join(aligned_parties) if aligned_parties else "unknown"
         
+        # Current date context - critical for temporal fields like validFrom/validThrough
+        today = datetime.now()
+        today_str = today.strftime("%Y-%m-%d")
+        next_week = (today + timedelta(days=7)).strftime("%Y-%m-%d")
+        next_month = (today + timedelta(days=30)).strftime("%Y-%m-%d")
+        
+        # Generate workflow context from .npl files
+        workflow_context = ""
+        try:
+            npl_source_dir = self.npl_source_dir / "npl-1.0"
+            if npl_source_dir.exists():
+                workflow_context = generate_all_workflow_guides(npl_source_dir, packages)
+                if workflow_context:
+                    logger.info(f"📋 Generated workflow context for {agent_id} ({len(workflow_context)} chars)")
+            else:
+                # Try alternative paths
+                alt_paths = [
+                    Path("npl/src/main/npl-1.0"),
+                    self.npl_source_dir
+                ]
+                for alt_path in alt_paths:
+                    if alt_path.exists():
+                        workflow_context = generate_all_workflow_guides(alt_path, packages)
+                        if workflow_context:
+                            logger.info(f"📋 Generated workflow context from {alt_path}")
+                            break
+        except Exception as e:
+            logger.warning(f"Could not generate workflow context: {e}")
+        
+        # Format workflow section
+        workflow_section = ""
+        if workflow_context:
+            workflow_section = f"""
+## 📋 PROTOCOL WORKFLOWS (from NPL backend)
+
+These are the actual workflows defined in the NPL backend. Follow them precisely!
+
+{workflow_context}
+
+**CRITICAL STATE AWARENESS:**
+- Protocols have STATES - you can only take actions valid for the CURRENT state
+- Use `*_next_actions(uuid)` tools to discover what actions are valid RIGHT NOW
+- NEVER assume state based on what you did previously - another party may have changed it
+- The NPL engine is the SINGLE SOURCE OF TRUTH for state
+- Query state BEFORE taking action, not after
+
+"""
+        
         instructions = f"""
 {GLOBAL_AGENT_RULES}
 
+## CURRENT DATE CONTEXT
+Today's date is: **{today_str}**
+- Use dates in the FUTURE (after {today_str}) for validity periods
+- Example valid range: {today_str} to {next_month}
+- NEVER use dates from 2024 or earlier - we are currently in {today.year}
+{workflow_section}
 ## YOUR OBJECTIVE: {objective}
 
 You are an autonomous agent pursuing objectives related to: **{objective}**.
 
 Based on your objective, you typically act in these party roles: **{party_list}**.
+
+### DATA FORMAT RULES:
+
+**DATETIME FORMAT (CRITICAL):**
+When a field requires DateTime, use this exact format:
+`{today.strftime("%Y-%m-%dT%H:%M:%S.000+00:00[UTC]")}`
+
+Examples:
+- validFrom: "{today.strftime("%Y-%m-%dT10:00:00.000+00:00[UTC]")}"
+- validThrough: "{(today + timedelta(days=30)).strftime("%Y-%m-%dT23:59:59.000+00:00[UTC]")}"
+
+Do NOT use simple date strings like "2026-01-22" - always include time and timezone.
+
+**PROTOCOL REFERENCES:**
+When a field requires a protocol reference (like itemOffered), use the protocol's UUID, not its name.
+- CORRECT: "itemOffered": "e56d97aa-92af-40f0-800e-fafbebd0856a"
+- WRONG: "itemOffered": "Premium Widget"
 
 ### HOW TO USE TOOLS:
 
@@ -1033,10 +1026,11 @@ Based on your objective, you typically act in these party roles: **{party_list}*
 - The system will AUTOMATICALLY BLOCK tools that don't align with your objective
 - If a tool is blocked, it means your objective doesn't match that party role
 
-**WORKFLOW CONTEXT:**
-- Check each tool's "📋 WORKFLOW CONTEXT" for prerequisites and state requirements
-- Call `recall_my_protocols()` at the start of each turn to see existing protocols
-- Prevents duplicate creation and helps track state
+**STATE-AWARE WORKFLOW:**
+- ALWAYS query `*_next_actions(uuid)` before taking action on a protocol
+- This tells you the CURRENT state and VALID actions
+- Don't guess or assume state - ASK the NPL engine
+- If an action fails with "state error", re-query and try the correct action
 
 **A2A COMMUNICATION:**
 - When creating multi-party protocols, exchange identities first via A2A
@@ -1046,7 +1040,7 @@ Based on your objective, you typically act in these party roles: **{party_list}*
 **ERROR RECOVERY:**
 - If a tool fails, the system will automatically help you reflect and retry
 - Read error messages carefully - they contain guidance on how to fix the issue
-- If error_type='state_error', query the protocol to check its state before retrying
+- If error_type='state_error', query `*_next_actions()` to check current state
 
 {custom_instructions or ''}
 """

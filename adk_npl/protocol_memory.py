@@ -231,63 +231,6 @@ def create_memory_tools(agent_id: str = "default") -> List[FunctionTool]:
             "hint": "Use the instance_id from these results when calling other NPL tools"
         }
     
-    def get_protocol_id(protocol_type: str) -> Dict[str, Any]:
-        """
-        Get the most recent instance ID for a protocol type.
-        
-        Quick way to get the ID of the last protocol you created of a given type.
-        Useful when you need to reference a recently created instance.
-        
-        Args:
-            protocol_type: The NPL protocol type name
-            
-        Returns:
-            The instance ID and current state, or error if not found
-            
-        Example Usage:
-            - "What's my X ID?" → get_protocol_id("X")
-            - "What's the ID of the protocol I just created?" → get_protocol_id("ProtocolType")
-        """
-        latest = memory.get_latest(protocol_type)
-        
-        if not latest:
-            return {
-                "success": False,
-                "error": f"No {protocol_type} instances found in memory",
-                "hint": f"You may need to create a {protocol_type} first, or the instance was created in a previous session"
-            }
-        
-        return {
-            "success": True,
-            "protocol_type": protocol_type,
-            "instance_id": latest["instance_id"],
-            "state": latest["state"],
-            "role": latest["role"],
-            "metadata": latest.get("metadata", {}),
-            "hint": f"Use instance_id '{latest['instance_id']}' when calling {protocol_type} actions"
-        }
-    
-    def get_workflow_context() -> Dict[str, Any]:
-        """
-        Get a summary of your current workflow context.
-        
-        Returns all protocol instances you've created or interacted with,
-        organized by type. Use this to understand your current state in
-        a multi-step workflow.
-        
-        Returns:
-            Summary of all tracked protocols with counts and recent actions
-            
-        Example Usage:
-            - "What's my current workflow state?" → get_workflow_context()
-            - "What have I created so far?" → get_workflow_context()
-        """
-        return {
-            "success": True,
-            **memory.get_summary(),
-            "hint": "This shows all protocols you've interacted with. Use recall_my_protocols() for details."
-        }
-    
     def remember_protocol(
         protocol_type: str,
         instance_id: str,
@@ -330,13 +273,11 @@ def create_memory_tools(agent_id: str = "default") -> List[FunctionTool]:
                 "state": state,
                 "role": role
             },
-            "hint": f"You can now recall this {protocol_type} using get_protocol_id('{protocol_type}')"
+            "hint": f"You can now recall this {protocol_type} using recall_my_protocols(protocol_type='{protocol_type}')"
         }
     
     return [
         FunctionTool(recall_my_protocols, require_confirmation=False),
-        FunctionTool(get_protocol_id, require_confirmation=False),
-        FunctionTool(get_workflow_context, require_confirmation=False),
         FunctionTool(remember_protocol, require_confirmation=False)
     ]
 

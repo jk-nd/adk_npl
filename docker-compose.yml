@@ -21,7 +21,9 @@ services:
       # Accept both localhost (browser) and keycloak (Docker) hostnames
       ENGINE_ALLOWED_ISSUERS: >-
         http://keycloak:11000/realms/purchasing,
-        http://keycloak:11000/realms/supplier
+        http://keycloak:11000/realms/supplier,
+        http://localhost:11000/realms/purchasing,
+        http://localhost:11000/realms/supplier
       # Override JWKS URL resolution: when Engine sees localhost issuer, use keycloak service instead
       # Format: issuer_url=jwks_url (comma-separated for multiple mappings)
       ENGINE_ISSUER_JWKS_URL_OVERRIDES: "http://localhost:11000/realms/purchasing=http://keycloak:11000/realms/purchasing/protocol/openid-connect/certs,http://localhost:11000/realms/supplier=http://keycloak:11000/realms/supplier/protocol/openid-connect/certs"

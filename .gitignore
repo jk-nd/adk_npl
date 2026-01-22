@@ -52,3 +52,12 @@ Thumbs.db
 docs/MEDIUM_ARTICLE_OUTLINE.md
 docs/EXEC_SUMMARY.md
 docs/EXECUTIVE_REPORT.md
+
+# Archive (not for GitHub)
+_archive/
+
+# Generated files
+npl/puml/
+frontend-gen/
+npl-guide/
+npl-mcp-server-NT-389-original/

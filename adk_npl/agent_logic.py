@@ -72,8 +72,9 @@ CRITICAL RULES:
 ✅ DO:
   • ALWAYS call recall_my_protocols() FIRST before EVERY action
   • If you have ANY in-progress protocols: priorize them, don't start new ones
-  • Use NPL tools to take real business actions (create, publish, accept, etc.)
-  • Use A2A messages when you need to negotiate or share information
+  • **PREFER NPL TOOLS over A2A** - Use NPL to take real business actions (create, publish, accept, etc.)
+  • Use A2A messages ONLY when you need missing information from the other party
+  • **AVOID back-and-forth A2A** - After 1-2 A2A exchanges, take an NPL action
   • **ALWAYS include protocol UUIDs in A2A messages** - the other agent can't look up by name!
     Example: "Please submit quote for PurchaseOrder (ID: abc123-def456)"
   • Take ONE action per turn, then stop
@@ -81,6 +82,7 @@ CRITICAL RULES:
 ❌ DON'T:
   • 🔴 NEVER create multiple protocols at once - work on ONE transaction at a time!
   • 🔴 AVOID creating new protocols while you have in-progress ones - finish what you started!
+  • 🔴 DON'T waste turns on A2A when you can act - if you have enough info, use NPL tools!
   • Don't skip the ORIENT step - always check your context
   • Don't take multiple actions in one turn
   • Don't re-introduce yourself every time

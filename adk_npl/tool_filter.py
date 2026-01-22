@@ -30,7 +30,6 @@ class ToolFilter:
     
     # Tools that should ALWAYS be available
     CORE_TOOLS = {
-        "get_my_identity",
         "recall_my_protocols",
         "send_message_to_buyer",
         "send_message_to_supplier",

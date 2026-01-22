@@ -152,21 +152,8 @@ def create_partner_memory_tools(memory: Optional[PartnerMemory] = None) -> list:
         """
         return memory.recall(role)
     
-    def list_known_partners() -> Dict[str, Any]:
-        """
-        List all partners whose identities you've stored.
-        
-        Useful for debugging or checking what partners you've already exchanged
-        identities with.
-        
-        Returns:
-            Dictionary of all known partner identities
-        """
-        return memory.list_partners()
-    
     return [
         FunctionTool(func=remember_partner_identity),
-        FunctionTool(func=recall_partner_identity),
-        FunctionTool(func=list_known_partners)
+        FunctionTool(func=recall_partner_identity)
     ]
 

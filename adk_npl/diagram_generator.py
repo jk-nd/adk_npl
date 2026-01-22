@@ -378,3 +378,284 @@ def generate_workflow_summary_for_protocol(npl_file_path: Path) -> Optional[str]
         logger.error(f"Failed to generate summary for {npl_file_path}: {e}")
         return None
 
+
+# =============================================================================
+# AGENT WORKFLOW CONTEXT GENERATOR
+# =============================================================================
+
+def generate_agent_workflow_guide(npl_file_path: Path) -> Optional[Dict]:
+    """
+    Generate a compact workflow guide optimized for agent instructions.
+    
+    This extracts the essential information an agent needs to understand
+    and execute protocol workflows correctly:
+    - State machine (what states exist, which are initial/final)
+    - Transitions (what actions move between states)
+    - Party roles (who can do what)
+    - Business rules (requirements that must be satisfied)
+    
+    Args:
+        npl_file_path: Path to .npl file
+        
+    Returns:
+        Dict with structured workflow information for agent context
+    """
+    try:
+        parser = NPLProtocolParser(npl_file_path)
+        info = parser.parse()
+        
+        if not info["protocol_name"]:
+            return None
+        
+        # Build state machine representation
+        states = info["states"]
+        initial = [s for s, t in states.items() if t == "initial"]
+        finals = [s for s, t in states.items() if t == "final"]
+        intermediates = [s for s, t in states.items() if t == "state"]
+        
+        # Build action map: who can do what from which state
+        actions_by_party = {}
+        transitions = []
+        
+        for perm in info["permissions"]:
+            action = perm["action"]
+            parties = perm["parties"]
+            source_states = perm["source_states"]
+            target_states = perm["target_states"]
+            requirements = perm.get("requirements", [])
+            
+            # Track transitions
+            for source in source_states:
+                for target in target_states:
+                    transitions.append({
+                        "action": action,
+                        "from": source,
+                        "to": target,
+                        "by": parties,
+                        "rules": requirements
+                    })
+            
+            # Group by party
+            for party in parties:
+                if party not in actions_by_party:
+                    actions_by_party[party] = []
+                actions_by_party[party].append({
+                    "action": action,
+                    "when": source_states,
+                    "then": target_states if target_states else ["same state"],
+                    "rules": requirements
+                })
+        
+        return {
+            "protocol": info["protocol_name"],
+            "parties": info["parties"],
+            "states": {
+                "initial": initial,
+                "intermediate": intermediates,
+                "final": finals,
+                "all": list(states.keys())
+            },
+            "actions_by_party": actions_by_party,
+            "transitions": transitions,
+            "global_rules": info.get("global_requirements", [])
+        }
+    except Exception as e:
+        logger.error(f"Failed to generate workflow guide for {npl_file_path}: {e}")
+        return None
+
+
+def format_workflow_guide_for_agent(guide: Dict) -> str:
+    """
+    Format a workflow guide as concise text for agent instructions.
+    
+    Args:
+        guide: Workflow guide dict from generate_agent_workflow_guide
+        
+    Returns:
+        Formatted string for agent context
+    """
+    if not guide:
+        return ""
+    
+    lines = [
+        f"### {guide['protocol']} Protocol",
+        f"**Parties:** {', '.join(guide['parties'])}",
+        ""
+    ]
+    
+    # State machine
+    states = guide["states"]
+    lines.append("**State Machine:**")
+    state_flow = " → ".join(
+        states["initial"] + 
+        states["intermediate"] + 
+        states["final"]
+    )
+    lines.append(f"`{state_flow}`")
+    lines.append("")
+    
+    # Actions by party (most important for the agent!)
+    lines.append("**Your Available Actions:**")
+    for party, actions in guide["actions_by_party"].items():
+        lines.append(f"\n*As {party}:*")
+        for act in actions:
+            when_str = ", ".join(act["when"])
+            then_str = ", ".join(act["then"])
+            lines.append(f"- `{act['action']}()` — when state is [{when_str}] → [{then_str}]")
+            if act["rules"]:
+                for rule in act["rules"]:
+                    lines.append(f"  ⚠️ Rule: {rule}")
+    
+    # Global rules
+    if guide["global_rules"]:
+        lines.append("\n**Business Rules:**")
+        for rule in guide["global_rules"]:
+            lines.append(f"- {rule}")
+    
+    return "\n".join(lines)
+
+
+def generate_all_workflow_guides(npl_source_dir: Path, packages: List[str] = None) -> str:
+    """
+    Generate workflow guides for all protocols in specified packages.
+    
+    This is the main function to call from agent_factory.py to get
+    all workflow context for agent instructions.
+    
+    Args:
+        npl_source_dir: Base path to NPL sources (e.g., npl/src/main/npl-1.0)
+        packages: List of package names to process (default: all)
+        
+    Returns:
+        Combined workflow guide text for all protocols
+    """
+    guides = []
+    
+    # Find all .npl files in packages
+    if not npl_source_dir.exists():
+        logger.warning(f"NPL source dir not found: {npl_source_dir}")
+        return ""
+    
+    # Search for NPL files
+    search_paths = []
+    if packages:
+        for pkg in packages:
+            pkg_dir = npl_source_dir / pkg
+            if pkg_dir.exists():
+                search_paths.extend(pkg_dir.glob("*.npl"))
+    else:
+        search_paths = list(npl_source_dir.rglob("*.npl"))
+    
+    for npl_file in search_paths:
+        guide = generate_agent_workflow_guide(npl_file)
+        if guide:
+            formatted = format_workflow_guide_for_agent(guide)
+            guides.append(formatted)
+            logger.debug(f"Generated workflow guide for {guide['protocol']}")
+    
+    if not guides:
+        logger.warning("No workflow guides generated")
+        return ""
+    
+    result = "\n\n---\n\n".join(guides)
+    logger.info(f"Generated {len(guides)} workflow guides ({len(result)} chars)")
+    return result
+
+
+def parse_puml_for_structure(puml_file_path: Path) -> Optional[Dict]:
+    """
+    Parse a .puml file (from npl puml) to extract protocol structure.
+    
+    Complements the .npl parsing by providing:
+    - Field definitions with types
+    - Method signatures with party roles
+    - Relationships to other protocols
+    
+    Args:
+        puml_file_path: Path to .puml file
+        
+    Returns:
+        Dict with protocol structure information
+    """
+    try:
+        content = puml_file_path.read_text()
+        
+        # Extract class name
+        class_match = re.search(r'class (\w+)', content)
+        protocol_name = class_match.group(1) if class_match else None
+        
+        # Extract fields: {field} +fieldName: Type
+        fields = []
+        for match in re.finditer(r'\{field\}\s+\+(\w+):\s+([^\n]+)', content):
+            fields.append({
+                "name": match.group(1),
+                "type": match.group(2).strip()
+            })
+        
+        # Extract methods: {method} +[party] methodName(params)
+        methods = []
+        for match in re.finditer(r'\{method\}\s+\+\[([^\]]+)\]\s+(\w+)\(([^)]*)\)', content):
+            methods.append({
+                "parties": [p.strip() for p in match.group(1).split('|')],
+                "name": match.group(2),
+                "params": match.group(3).strip()
+            })
+        
+        # Extract relationships: --> "1" other.Protocol : fieldName
+        relationships = []
+        for match in re.finditer(r'--> "[\d*]" ([^\s:]+)', content):
+            relationships.append(match.group(1))
+        
+        return {
+            "protocol": protocol_name,
+            "fields": fields,
+            "methods": methods,
+            "relationships": relationships
+        }
+    except Exception as e:
+        logger.error(f"Failed to parse puml {puml_file_path}: {e}")
+        return None
+
+
+def format_puml_structure_for_agent(puml_info: Dict) -> str:
+    """
+    Format puml structure as concise text for agent instructions.
+    
+    Args:
+        puml_info: Structure dict from parse_puml_for_structure
+        
+    Returns:
+        Formatted string for agent context
+    """
+    if not puml_info:
+        return ""
+    
+    lines = [
+        f"### {puml_info['protocol']} Structure",
+        ""
+    ]
+    
+    # Fields (key data the agent needs to provide)
+    if puml_info["fields"]:
+        lines.append("**Fields:**")
+        for f in puml_info["fields"]:
+            lines.append(f"- `{f['name']}`: {f['type']}")
+        lines.append("")
+    
+    # Methods with party roles
+    if puml_info["methods"]:
+        lines.append("**Methods:**")
+        for m in puml_info["methods"]:
+            parties = " | ".join(m["parties"])
+            params = m["params"] if m["params"] else ""
+            lines.append(f"- `{m['name']}({params})` — [{parties}]")
+        lines.append("")
+    
+    # Relationships (what other protocols are referenced)
+    if puml_info["relationships"]:
+        lines.append("**References:**")
+        for r in puml_info["relationships"]:
+            lines.append(f"- {r}")
+    
+    return "\n".join(lines)
+

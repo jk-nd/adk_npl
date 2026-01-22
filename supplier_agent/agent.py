@@ -15,7 +15,7 @@ limitations under the License.
 """
 
 import logging
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any, List, Callable
 
 from google.adk.agents import LlmAgent
 from google.adk.tools import FunctionTool
@@ -23,7 +23,7 @@ from google.adk.sessions import InMemorySessionService
 
 from adk_npl.config import NPLConfig
 from adk_npl.agent_factory import EnterpriseAgentFactory
-from adk_npl.goal_schemas import SupplierGoalStatus
+from adk_npl.goal_schemas import SupplierGoalState
 from adk_npl.activity_logger import get_activity_logger
 
 logger = logging.getLogger(__name__)
@@ -38,7 +38,8 @@ async def create_supplier_agent(
     enable_reflection: bool = True,
     enable_planning: bool = True,
     enable_runtime_validation: bool = True,
-    model: str = "gemini-2.0-flash"  # Stable version (non-experimental)
+    model: str = "gemini-2.0-flash",  # Stable version (non-experimental)
+    tool_usage_callback: Optional[Callable[[str, float, bool], None]] = None
 ) -> Dict[str, Any]:
     """
     Create an enterprise-grade supplier/seller agent.
@@ -123,9 +124,10 @@ async def create_supplier_agent(
         enable_planning=enable_planning,
         enable_runtime_validation=enable_runtime_validation,
         max_retries=3,
-        max_tool_calls_per_turn=15,  # Balanced: allows workflow completion while preventing API exhaustion
+        max_tool_calls_per_turn=25,  # Higher limit for sequential execution (planner makes agents slower)
         custom_instructions=custom_instructions,
-        output_schema=None  # ← Disabled: blocks tool calling. Use text-based goal tracking instead.
+        output_schema=None,  # ← Disabled: blocks tool calling. Use text-based goal tracking instead.
+        tool_usage_callback=tool_usage_callback
     )
     
     # Extract agent and plugins from result

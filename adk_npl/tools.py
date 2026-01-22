@@ -35,6 +35,99 @@ from .utils import (
 
 logger = logging.getLogger(__name__)
 
+
+def normalize_datetime_value(value: Any, field_name: str = "") -> Any:
+    """
+    Normalize date/datetime strings to NPL-compatible DateTime format.
+    
+    NPL expects format: "2026-01-22T10:00:00.000+00:00[UTC]"
+    
+    This function auto-converts:
+    - Simple dates: "2026-01-22" -> "2026-01-22T00:00:00.000+00:00[UTC]"
+    - ISO dates without zone: "2026-01-22T10:00:00" -> "2026-01-22T10:00:00.000+00:00[UTC]"
+    - ISO dates with offset: "2026-01-22T10:00:00+00:00" -> "2026-01-22T10:00:00.000+00:00[UTC]"
+    
+    Args:
+        value: The value to normalize
+        field_name: Field name (for logging)
+        
+    Returns:
+        Normalized value (string if datetime-like, original otherwise)
+    """
+    if not isinstance(value, str):
+        return value
+    
+    # Skip if already in NPL format (has timezone in brackets)
+    if "[" in value and "]" in value:
+        return value
+    
+    # Check if it looks like a date pattern
+    import re
+    
+    # Pattern: YYYY-MM-DD with optional time
+    date_pattern = r'^(\d{4}-\d{2}-\d{2})(T(\d{2}:\d{2}:\d{2})(\.\d+)?)?(([+-]\d{2}:\d{2})|Z)?$'
+    match = re.match(date_pattern, value)
+    
+    if not match:
+        return value  # Not a date pattern
+    
+    try:
+        date_part = match.group(1)  # YYYY-MM-DD
+        time_part = match.group(3) or "00:00:00"  # HH:MM:SS
+        millis_part = match.group(4) or ".000"  # .mmm
+        
+        # Ensure millis has 3 digits
+        if millis_part:
+            millis_part = millis_part[:4]  # Truncate to .xxx
+            while len(millis_part) < 4:
+                millis_part += "0"
+        else:
+            millis_part = ".000"
+        
+        # Build NPL-compatible format
+        normalized = f"{date_part}T{time_part}{millis_part}+00:00[UTC]"
+        
+        if normalized != value:
+            logger.debug(f"DateTime normalized: '{value}' -> '{normalized}' (field: {field_name})")
+        
+        return normalized
+    except Exception as e:
+        logger.warning(f"Failed to normalize datetime '{value}': {e}")
+        return value
+
+
+def normalize_kwargs_datetime(kwargs: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Normalize all datetime-like values in kwargs dict.
+    
+    Looks for fields likely to be datetime (by name pattern) and normalizes them.
+    
+    Args:
+        kwargs: Dictionary of keyword arguments
+        
+    Returns:
+        New dict with normalized datetime values
+    """
+    # Fields likely to be DateTime based on common naming patterns
+    datetime_field_patterns = [
+        'valid', 'date', 'time', 'from', 'through', 'until', 'at', 'on',
+        'created', 'updated', 'expires', 'starts', 'ends', 'deadline'
+    ]
+    
+    result = {}
+    for key, value in kwargs.items():
+        # Check if field name suggests it's a datetime
+        key_lower = key.lower()
+        is_likely_datetime = any(pattern in key_lower for pattern in datetime_field_patterns)
+        
+        if is_likely_datetime and isinstance(value, str):
+            result[key] = normalize_datetime_value(value, key)
+        else:
+            result[key] = value
+    
+    return result
+
+
 # Try to import diagram generator (optional - may not have NPL source files)
 try:
     from .diagram_generator import generate_workflow_summary_for_protocol, NPLProtocolParser
@@ -56,6 +149,8 @@ def create_typed_function(
     
     This is necessary because ADK extracts parameter info from function signatures,
     and **kwargs doesn't expose parameter names/types to the LLM.
+    
+    Includes automatic DateTime normalization for date-like fields.
     
     Args:
         func_name: Name of the function
@@ -91,6 +186,7 @@ def create_typed_function(
     param_str = ", ".join(params)
     
     # Build the function code
+    # Note: We call _normalize_kwargs to auto-convert DateTime fields
     code = f'''
 def {func_name}({param_str}) -> dict:
     """
@@ -108,68 +204,15 @@ def {func_name}({param_str}) -> dict:
             code += f"    else:\n"
             code += f"        kwargs['{name}'] = None\n"
     
+    # Normalize datetime values before calling implementation
+    code += "    kwargs = _normalize_kwargs(kwargs)\n"
     code += "    return _impl(**kwargs)\n"
     
     # Execute the code to create the function
-    local_ns = {'_impl': impl}
+    local_ns = {'_impl': impl, '_normalize_kwargs': normalize_kwargs_datetime}
     exec(code, local_ns)
     
     return local_ns[func_name]
-
-
-def create_identity_tool(config: NPLConfig) -> FunctionTool:
-    """Create a tool that returns the agent's own identity and party claims."""
-    username = config.credentials.get("username", "unknown")
-    
-    # Extract org/dept from username pattern (e.g., purchasing_agent@acme-corp.com)
-    email = username
-    org = "Unknown"
-    dept = "Unknown"
-    
-    if "@" in username:
-        if "acme-corp" in username:
-            org = "Acme Corp"
-            dept = "Procurement" if "purchasing" in username else "Unknown"
-        elif "supplier-inc" in username:
-            org = "Supplier Inc"
-            dept = "Sales" if "supplier" in username else "Unknown"
-    elif "purchasing" in username:
-        org = "Acme Corp"
-        dept = "Procurement"
-    elif "supplier" in username:
-        org = "Supplier Inc"
-        dept = "Sales"
-    
-    def get_my_identity() -> str:
-        """
-        Get your own identity and party claims for use in protocol bindings.
-        
-        CRITICAL: Call this BEFORE creating any multi-party protocol (Offer, PurchaseOrder).
-        
-        Returns:
-            Your identity information with EXACT claim values to use in A2A messages
-            and NPL protocol party bindings.
-        """
-        return f"""=== YOUR IDENTITY (use EXACTLY these values) ===
-
-Organization: {org}
-Department: {dept}
-
-=== FOR A2A MESSAGES ===
-When another agent asks for your identity, reply with:
-"My identity: organization={org}, department={dept}"
-
-=== FOR NPL PROTOCOL CREATION ===
-When creating a multi-party protocol where YOU are a party, use:
-{{"organization": "{org}", "department": "{dept}"}}
-
-=== IMPORTANT ===
-- These are YOUR claims from your JWT token
-- The other party MUST provide THEIR claims via A2A before you can bind them
-- NEVER invent or guess claims for other parties
-"""
-    
-    return FunctionTool(get_my_identity)
 
 
 class NPLToolGenerator:
@@ -182,20 +225,35 @@ class NPLToolGenerator:
     
     # Error categories for structured error responses
     ERROR_PATTERNS = {
+        "datetime_format": {
+            "patterns": ["datetimeparseexception", "must be of type 'datetime'", "could not be parsed"],
+            "retryable": False,
+            "guidance": "DateTime format is invalid. Use format: 'YYYY-MM-DDTHH:MM:SS.mmm+00:00[UTC]' (e.g., '2026-01-22T10:00:00.000+00:00[UTC]'). Do NOT use simple date strings like '2026-01-22'."
+        },
+        "protocol_reference": {
+            "patterns": ["invalid uuid string", "must be of type '/1.0?/"],
+            "retryable": False,
+            "guidance": "Protocol reference must be a UUID, not a name. First query for the protocol to get its @id (UUID), then use that UUID value."
+        },
+        "validity_period": {
+            "patterns": ["validity period has passed", "valid period", "expired"],
+            "retryable": False,
+            "guidance": "The validity period is in the past. Use FUTURE dates (after today). Check your validFrom and validThrough dates."
+        },
         "state_error": {
             "patterns": ["illegal protocol state", "current state is not", "not one of"],
             "retryable": True,
             "guidance": "The protocol is not in the correct state for this action. Query the protocol instance to check its current state, then wait and retry when the state allows this action."
         },
         "business_rule": {
-            "patterns": ["business rule", "assertion failed", "require(", "validation"],
+            "patterns": ["business rule", "assertion failed", "require("],
             "retryable": False,
             "guidance": "A business rule was violated. Check the error message for details and adjust your parameters to comply with the rule."
         },
         "not_found": {
             "patterns": ["no such", "not found", "does not exist", "404"],
             "retryable": False,
-            "guidance": "The referenced item does not exist. Verify the ID is correct by querying for available instances."
+            "guidance": "The resource does not exist. Verify the ID is correct. Use recall_my_protocols() to see available instances, or request the correct ID from the other party."
         },
         "permission_denied": {
             "patterns": ["permission denied", "not authorized", "forbidden", "403"],
@@ -203,9 +261,9 @@ class NPLToolGenerator:
             "guidance": "You don't have permission to perform this action. Check if you're using the correct party role."
         },
         "invalid_data": {
-            "patterns": ["invalid", "malformed", "bad request", "400", "parse error"],
+            "patterns": ["invalid", "malformed", "bad request", "parse error"],
             "retryable": False,
-            "guidance": "The data format is invalid. Check parameter types and formats - especially DateTime fields which must be in format '2006-01-02T15:04:05.999+01:00[Europe/Zurich]'."
+            "guidance": "The data format is invalid. Check parameter types and formats."
         },
         "runtime_error": {
             "patterns": ["runtime error", "r13:", "r14:", "r15:"],
@@ -604,8 +662,10 @@ class NPLToolGenerator:
             
             # Add next_actions tool (NPL-assisted state awareness)
             # This is the key tool for the "orient → decide → act → stop" pattern
-            next_actions_func = self._create_next_actions_function(package, protocol_name)
-            tools.append(FunctionTool(next_actions_func, require_confirmation=False))
+            # Skip for Product - products are simple entities with minimal workflow
+            if protocol_name != "Product":
+                next_actions_func = self._create_next_actions_function(package, protocol_name)
+                tools.append(FunctionTool(next_actions_func, require_confirmation=False))
             
             # TODO: Add GraphQL-based list tool for querying protocols by party
             # NPL has a GraphQL read model with JWT/claims authorization
@@ -1085,10 +1145,10 @@ Even though ALL parties are bound to this protocol, **only ONE party should inst
 **⛔ MANDATORY: A2A IDENTITY EXCHANGE BEFORE CREATION**
 You CANNOT use placeholder or invented claims like "PurchasingOrg" or "BuyerDept".
 YOU MUST:
-1. Call `get_my_identity` to get YOUR claims (organization, department)
-2. Send an A2A message asking the other party: "What is your organization and department?"
-3. WAIT for their reply with their EXACT claims
-4. Use ONLY the claims they provided when creating this protocol
+1. Send an A2A message asking the other party: "What is your organization and department?"
+2. WAIT for their reply with their EXACT claims
+3. Use ONLY the claims they provided when creating this protocol
+4. Your own identity claims are already available in your JWT token
 
 **Example A2A exchange:**
 - You send: "I want to offer you a product. My identity: organization=Supplier Inc, department=Sales. What is YOUR organization and department?"

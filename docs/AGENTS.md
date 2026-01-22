@@ -38,7 +38,40 @@ buyer: accept, reject
 - require(quantity <= inventory, "Insufficient stock")
 ```
 
-### 3. Schema-Aware Tool Generation
+### 3. Workflow Context Injection
+
+At agent initialization, the system parses `.npl` source files to extract complete workflow information and injects it into agent instructions:
+
+```
+### Offer Protocol
+**Parties:** seller, buyer
+
+**State Machine:**
+`draft → published → accepted → expired → withdrawn → rejected`
+
+**Your Available Actions:**
+
+*As seller:*
+- `publish()` — when state is [draft] → [published]
+- `updatePrice()` — when state is [draft] → [same state]
+  ⚠️ Rule: Price must be positive
+
+*As buyer:*
+- `accept()` — when state is [published] → [accepted]
+- `reject()` — when state is [published] → [rejected]
+```
+
+This ensures agents understand:
+- The complete state machine for each protocol
+- Which actions are valid in which states
+- Which party can perform which actions
+- Business rules that must be satisfied
+
+**Key files:**
+- `adk_npl/diagram_generator.py` - Parses `.npl` files and generates workflow guides
+- `adk_npl/agent_factory.py` - Injects workflow context into agent instructions
+
+### 4. Schema-Aware Tool Generation
 
 NPL tools have explicit typed parameters:
 
@@ -56,7 +89,7 @@ def npl_commerce_Product_create(
 ) -> dict
 ```
 
-### 4. NPL-Assisted Decision Loop
+### 5. NPL-Assisted Decision Loop
 
 Agents follow the **ORIENT → DECIDE → ACT → STOP** pattern:
 
@@ -78,7 +111,7 @@ Agents follow the **ORIENT → DECIDE → ACT → STOP** pattern:
 
 See [`docs/WHY_AGENTS_FAILED.md`](WHY_AGENTS_FAILED.md) for the complete journey.
 
-### 5. Protocol Creation Principle
+### 6. Protocol Creation Principle
 
 **CRITICAL**: Only the party at the START of the workflow sequence should instantiate a protocol.
 
@@ -94,18 +127,18 @@ This is enforced through:
 
 This prevents agents from creating protocols out of sequence or with incorrect party roles.
 
-### 6. Enterprise ADK Callbacks
+### 7. Enterprise ADK Callbacks
 
 Agents use ADK's callback system for robust behavior:
 
 | Callback | Purpose |
 |----------|---------|
-| `before_tool_callback` | Enforce max 15 tool calls per turn, record metrics |
-| `after_tool_callback` | Log tool completions, record latency |
+| `before_tool_callback` | Enforce max 25 tool calls per turn, prevent duplicate sequential calls, require orientation before creates |
+| `after_tool_callback` | Log tool completions, record latency, auto-track protocols to memory |
 | `on_tool_error_callback` | Categorize NPL errors, provide guidance, record errors |
 | `on_model_error_callback` | Rate limit backoff (429 handling) |
 
-### 7. Federated Identity
+### 8. Federated Identity
 
 Each agent authenticates with its own Keycloak realm:
 
@@ -121,11 +154,12 @@ Each agent authenticates with its own Keycloak realm:
 **Location**: Acme Corp, Procurement Department
 
 **Tools**:
-- `get_my_identity` - Get agent's party claims
 - `list_shopping_items` - View shopping list
 - `recall_my_protocols` - Check existing protocols
+- `remember_protocol` - Track a protocol instance
 - `send_message_to_supplier` - A2A communication
-- `npl_*` - All NPL protocol tools
+- `npl_*` - All NPL protocol tools (dynamically generated)
+- `npl_*_next_actions` - Query current state and valid actions
 
 **Inventory**: `data/buyer_shopping_list.json`
 
@@ -134,11 +168,12 @@ Each agent authenticates with its own Keycloak realm:
 **Location**: Supplier Inc, Sales Department
 
 **Tools**:
-- `get_my_identity` - Get agent's party claims
-- `list_inventory_products` - View available inventory
+- `list_products` - View available inventory
 - `recall_my_protocols` - Check existing protocols
+- `remember_protocol` - Track a protocol instance
 - `send_message_to_buyer` - A2A communication
-- `npl_*` - All NPL protocol tools
+- `npl_*` - All NPL protocol tools (dynamically generated)
+- `npl_*_next_actions` - Query current state and valid actions
 
 **Inventory**: `data/supplier_inventory.json`
 
