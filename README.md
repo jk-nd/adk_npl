@@ -316,13 +316,16 @@ Unlike standard OpenAPI integrations, this project uses a "Smart Bridge" that:
 - **Extracts business rules** from NPL `require` statements
 - **Maps state transitions** from NPL `become` statements  
 - **Provides state awareness** via `npl_*_next_actions()` tools
+- **Injects workflow context** at agent init by parsing `.npl` source files
 - **Routes notifications** to inform agents when state changes
 - **Embeds semantics in tool docstrings** so agents understand contracts
 
+**Workflow Context Injection**: At agent initialization, the system parses `.npl` files to extract complete workflow information (states, transitions, party roles, business rules) and injects it directly into agent instructions. This ensures agents understand the protocol state machine before taking any action.
+
 ### ADK Callbacks & Telemetry
 Agents use Google ADK's callback system for:
-- `before_tool_callback`: Enforce tool call limits (max 15/turn), record metrics
-- `after_tool_callback`: Log tool completions, record latency metrics
+- `before_tool_callback`: Enforce tool call limits (max 25/turn), prevent duplicate sequential calls, require orientation before creates, record metrics
+- `after_tool_callback`: Log tool completions, record latency metrics, auto-track protocols to memory
 - `on_tool_error_callback`: Categorize and handle NPL errors with guidance, record error metrics
 - `on_model_error_callback`: Rate limit backoff with exponential backoff
 - **OpenTelemetry Integration**: Automatic tracing of LLM calls, tool invocations, and agent reasoning

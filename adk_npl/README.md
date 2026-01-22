@@ -5,11 +5,12 @@ A Python library for integrating Google's Agent Development Kit (ADK) with Noume
 ## 🎯 Key Features
 
 - **Smart NPL Bridge**: Automatically enriches AI tools with semantic information from NPL source code
+- **Workflow Context Injection**: Parses `.npl` files at init to generate workflow guides for agents
 - **Schema-Aware Tools**: Generates typed `FunctionTool` instances from OpenAPI specs
 - **Business Rule Extraction**: Parses `require` statements so agents understand contract rules
 - **State Machine Mapping**: Extracts `become` transitions for workflow understanding
 - **Standards Alignment**: Maps NPL types to Schema.org, ISO 20022, SWIFT, GS1
-- **Enterprise Callbacks**: Tool limits, error categorization, rate limit backoff
+- **Enterprise Callbacks**: Tool limits, error categorization, rate limit backoff, protocol tracking
 - **Monitoring**: Built-in metrics, structured logging, health checks
 
 ## 📦 Module Structure
@@ -21,7 +22,7 @@ adk_npl/
 ├── client.py             # NPL Engine REST client with retries
 ├── auth.py               # Keycloak OAuth2 authentication
 ├── config.py             # Configuration management
-├── diagram_generator.py  # PlantUML workflow diagrams
+├── diagram_generator.py  # PlantUML diagrams + workflow context generation
 ├── standards_registry.py # Industry standards mapping
 ├── protocol_memory.py    # Cross-turn protocol tracking
 ├── partner_memory.py     # A2A partner identity storage
@@ -119,15 +120,46 @@ tools = await generator.generate_tools(packages=["commerce"])
 └─────────────────────────────────────────────────────────────┘
 ```
 
+## 📋 Workflow Context Injection
+
+At agent initialization, the factory parses `.npl` source files to generate workflow context:
+
+```python
+# In agent_factory.py, workflow context is automatically injected
+result = await factory.create_agent(
+    agent_id="buyer_agent",
+    objective="buying",
+    packages=["commerce"]  # Will parse commerce/*.npl files
+)
+```
+
+The agent receives context like:
+
+```
+### Offer Protocol
+**Parties:** seller, buyer
+
+**State Machine:**
+`draft → published → accepted → expired → withdrawn → rejected`
+
+**Your Available Actions:**
+
+*As buyer:*
+- `accept()` — when state is [published] → [accepted]
+- `reject()` — when state is [published] → [rejected]
+```
+
+This ensures agents understand the complete workflow before taking action.
+
 ## 🔌 ADK Callbacks
 
 The `EnterpriseAgentFactory` configures these ADK callbacks:
 
 | Callback | Purpose |
 |----------|---------|
-| `before_tool_callback` | Enforce max 5 tool calls per turn |
-| `after_tool_callback` | Log tool completions |
-| `on_tool_error_callback` | Categorize NPL errors (validation, permission, not_found) |
+| `before_tool_callback` | Enforce max 25 tool calls per turn, prevent duplicate sequential calls, require orientation before creates |
+| `after_tool_callback` | Log tool completions, auto-track protocols to memory |
+| `on_tool_error_callback` | Categorize NPL errors (validation, permission, not_found), provide actionable guidance |
 | `on_model_error_callback` | Exponential backoff for 429 rate limits |
 
 ## ⚙️ Configuration
