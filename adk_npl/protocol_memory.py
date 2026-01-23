@@ -206,12 +206,8 @@ def create_memory_tools(agent_id: str = "default") -> List[FunctionTool]:
         """
         logger.info(f"🧭 recall_my_protocols CALLED by {agent_id} with type={protocol_type}, state={state}")
         
-        # Log to activity log for metrics tracking
-        get_activity_logger().log_tool_call(
-            actor=agent_id,
-            tool_name="recall_my_protocols",
-            args={"protocol_type": protocol_type, "state": state}
-        )
+        # Note: Tool call logging is handled centrally in agent_factory before_tool_callback
+        # to avoid double-logging in the Activity Feed
         
         protocols = memory.get_protocols(protocol_type=protocol_type, state=state)
         logger.info(f"🧭 recall_my_protocols RESULT: {len(protocols)} protocols found")

@@ -410,6 +410,97 @@ class ActivityLogger:
         level = "info" if success else "warning"
         self.log_event("tool_call", actor, f"🔧 {tool_name}", details, level)
     
+    def log_tool_call_complete(
+        self,
+        actor: str,
+        tool_name: str,
+        args: Optional[Dict[str, Any]] = None,
+        result: Any = None,
+        latency_ms: float = 0,
+        success: bool = True
+    ):
+        """
+        Log a complete tool call (args + result in one event).
+        
+        Args:
+            actor: The agent that made the tool call
+            tool_name: Name of the tool
+            args: Tool arguments
+            result: Tool result
+            latency_ms: Execution time in milliseconds
+            success: Whether the call succeeded
+        """
+        import json
+        
+        details = {
+            "tool_name": tool_name,
+            "latency_ms": round(latency_ms, 1),
+            "success": success,
+            "agent": actor
+        }
+        
+        # Include args if present
+        if args:
+            # Truncate large args
+            try:
+                args_str = json.dumps(args, default=str)
+                details["args"] = args_str[:200] if len(args_str) > 200 else args_str
+            except:
+                details["args"] = str(args)[:200]
+        
+        # Handle result - check for None explicitly, not truthiness
+        # (empty list [] or empty dict {} are valid results)
+        if result is not None:
+            # Create a smart preview based on result type
+            if isinstance(result, dict):
+                # Check for blocked calls
+                if result.get("blocked"):
+                    details["blocked"] = True
+                    details["result_preview"] = result.get("reason", "Call blocked")
+                    level = "warning"
+                    self.log_event("tool_call", actor, f"🚫 {tool_name}", details, level)
+                    return  # Early return for blocked calls
+                
+                # Extract key information for common result patterns
+                if "@id" in result:
+                    details["protocol_id"] = result["@id"][:12] + "..."
+                if "activeState" in result:
+                    details["state"] = result.get("activeState", {}).get("@name", "unknown")
+                if "error" in result:
+                    details["error"] = str(result["error"])[:100]
+                if "products" in result:
+                    details["count"] = f"{len(result['products'])} products"
+                if "needs" in result:
+                    details["count"] = f"{len(result['needs'])} items"
+                if "protocols" in result:
+                    details["count"] = f"{len(result['protocols'])} protocols"
+                
+                # Try JSON serialization for cleaner output
+                try:
+                    result_str = json.dumps(result, indent=2, default=str)
+                except:
+                    result_str = str(result)
+            elif isinstance(result, list):
+                details["count"] = f"{len(result)} items"
+                try:
+                    result_str = json.dumps(result, indent=2, default=str)
+                except:
+                    result_str = str(result)
+            else:
+                result_str = str(result)
+            
+            # Truncate full result for preview
+            details["result_preview"] = result_str[:500] if len(result_str) > 500 else result_str
+        else:
+            # result is None - likely blocked or fast return
+            if latency_ms < 10:
+                details["result_preview"] = "(duplicate call blocked)"
+            else:
+                details["result_preview"] = "(void)"
+        
+        level = "info" if success else "warning"
+        self.log_event("tool_call", actor, f"🔧 {tool_name}", details, level)
+    
     def get_recent_events(self, limit: int = 100) -> List[Dict[str, Any]]:
         """Get recent events from buffer."""
         with self.buffer_lock:

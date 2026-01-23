@@ -325,7 +325,7 @@ Unlike standard OpenAPI integrations, this project uses a "Smart Bridge" that:
 ### ADK Callbacks & Telemetry
 Agents use Google ADK's callback system for:
 - `before_tool_callback`: Enforce tool call limits (max 25/turn), prevent duplicate sequential calls, require orientation before creates, record metrics
-- `after_tool_callback`: Log tool completions, record latency metrics, auto-track protocols to memory
+- `after_tool_callback`: Capture tool return values via ADK's `tool_response` parameter, log completions with results, record latency metrics, auto-track protocols to memory
 - `on_tool_error_callback`: Categorize and handle NPL errors with guidance, record error metrics
 - `on_model_error_callback`: Rate limit backoff with exponential backoff
 - **OpenTelemetry Integration**: Automatic tracing of LLM calls, tool invocations, and agent reasoning
@@ -358,7 +358,10 @@ This prevents agents from creating protocols out of sequence or with incorrect p
 
 ## 📊 Monitoring & Observability
 
-- **Activity Log**: Real-time trace of A2A messages, NPL calls, and agent thinking
+- **Activity Log**: Real-time trace of A2A messages, NPL calls, and agent tool usage
+  - **Tool Results Display**: Expandable view showing tool arguments and actual return values
+  - **Latency Tracking**: Response times for NPL API calls and tool executions
+  - **Duplicate Call Detection**: Visual indication when agents attempt redundant calls
 - **Metrics Dashboard**: Comprehensive metrics including:
   - LLM API calls (by agent, latency)
   - Agent tool calls (by agent, by tool, success rate)

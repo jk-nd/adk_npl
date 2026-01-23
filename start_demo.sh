@@ -149,6 +149,12 @@ echo ""
 # Create logs directory
 mkdir -p logs
 
+# Add separator to chat_api log for this run
+echo "" >> logs/chat_api.log
+echo "============================================================" >> logs/chat_api.log
+echo "=== NEW RUN: $(date '+%Y-%m-%d %H:%M:%S') ===" >> logs/chat_api.log
+echo "============================================================" >> logs/chat_api.log
+
 # Note: Activity logs are kept for historical record
 # Each session creates a new activity_TIMESTAMP.json file
 echo -e "${BLUE}📝 Activity logs will be created in logs/ directory${NC}"
@@ -274,13 +280,14 @@ echo ""
 echo -e "${YELLOW}📝 Logs:${NC}"
 echo -e "   Activity API: logs/activity_api.log"
 echo -e "   Frontend:     logs/frontend.log"
-echo -e "   Chat API:     (output below)"
+echo -e "   Chat API:     logs/chat_api.log (also shown below)"
 echo ""
 echo -e "${YELLOW}Press Ctrl+C to stop all services${NC}"
 echo ""
 echo -e "${BLUE}============================================================${NC}"
 echo ""
 
-# Run the main chat API in foreground (this blocks)
-cd chat_api && uvicorn main:app --host 0.0.0.0 --port 8001
+# Run the main chat API in foreground, logging to file AND displaying
+# Using tee to capture logs for later analysis while still showing output
+cd chat_api && uvicorn main:app --host 0.0.0.0 --port 8001 2>&1 | tee -a ../logs/chat_api.log
 

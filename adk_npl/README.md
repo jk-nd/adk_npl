@@ -158,9 +158,11 @@ The `EnterpriseAgentFactory` configures these ADK callbacks:
 | Callback | Purpose |
 |----------|---------|
 | `before_tool_callback` | Enforce max 25 tool calls per turn, prevent duplicate sequential calls, require orientation before creates |
-| `after_tool_callback` | Log tool completions, auto-track protocols to memory |
+| `after_tool_callback` | Capture tool return values via ADK's `tool_response` parameter, log completions with results and latency, auto-track protocols to memory |
 | `on_tool_error_callback` | Categorize NPL errors (validation, permission, not_found), provide actionable guidance |
 | `on_model_error_callback` | Exponential backoff for 429 rate limits |
+
+**Note on `after_tool_callback`**: ADK passes the tool's actual return value as the `tool_response` parameter. This enables logging and displaying what tools actually return, which is invaluable for debugging agent behavior.
 
 ## ⚙️ Configuration
 

@@ -46,6 +46,7 @@ const eventTypeIcons: Record<string, { icon: string; class: string }> = {
   agent_message: { icon: '◈', class: 'icon-message' },
   agent_thinking: { icon: '💭', class: 'icon-thinking' },
   agent_tool_call: { icon: '⚙', class: 'icon-tool' },
+  tool_call: { icon: '✓', class: 'icon-tool-complete' },
   npl_api: { icon: '◆', class: 'icon-api' },
   state_transition: { icon: '→', class: 'icon-transition' },
   authentication: { icon: '●', class: 'icon-auth' },
@@ -66,7 +67,7 @@ export function ActivityLog() {
   const [autoRefresh, setAutoRefresh] = useState(true);
 
   // Fetch recent activity (show all events, no filtering)
-  const { data: events, refetch } = useQuery<ActivityEvent[]>({
+  const { data: events } = useQuery<ActivityEvent[]>({
     queryKey: ['activity', 'recent'],
     queryFn: async () => {
       const response = await fetch(`${ACTIVITY_API_URL}/api/activity/logs?limit=200`);
@@ -150,9 +151,6 @@ export function ActivityLog() {
             />
             <span>Auto</span>
           </label>
-          <button className="refresh-btn" onClick={() => refetch()} title="Refresh">
-            ↻
-          </button>
         </div>
       </div>
 
@@ -167,8 +165,7 @@ export function ActivityLog() {
                 <th className="col-time">Time</th>
                 <th className="col-type">Type</th>
                 <th className="col-actor">Actor</th>
-                <th className="col-action">Action</th>
-                <th className="col-expand"></th>
+                <th className="col-action">Action / Result</th>
               </tr>
             </thead>
             <tbody>
@@ -245,6 +242,9 @@ export function ActivityLog() {
                             </span>
                           )}
                           <strong>{event.details.method || 'API'}</strong> {event.details.endpoint}
+                          {event.details.response_time_ms && (
+                            <span className="tool-latency">{Math.round(event.details.response_time_ms)}ms</span>
+                          )}
                         </summary>
                         <div className="npl-api-body">
                           {event.details.request_body && (
@@ -266,20 +266,41 @@ export function ActivityLog() {
                           </div>
                         </div>
                       </details>
+                    ) : event.event_type === 'tool_call' && event.details?.tool_name && event.details?.latency_ms !== undefined ? (
+                      <details className="tool-result-details">
+                        <summary className="tool-result-summary">
+                          <span className={`tool-status ${event.details.success !== false ? 'success' : 'error'}`}>
+                            {event.details.success !== false ? '✓' : '✗'}
+                          </span>
+                          <strong>{event.details.tool_name}</strong>
+                          <span className="tool-latency">{event.details.latency_ms?.toFixed(0)}ms</span>
+                          {event.details.protocol_id && (
+                            <span className="tool-protocol-id">{event.details.protocol_id}</span>
+                          )}
+                          {event.details.state && (
+                            <span className="tool-state">{event.details.state}</span>
+                          )}
+                          {event.details.count && (
+                            <span className="tool-count">{event.details.count}</span>
+                          )}
+                          {event.details.error && (
+                            <span className="tool-error">{event.details.error}</span>
+                          )}
+                        </summary>
+                        <div className="tool-result-body">
+                          {event.details.args && (
+                            <div className="tool-args">
+                              <strong>Args:</strong> <code>{event.details.args}</code>
+                            </div>
+                          )}
+                          <pre>{event.details.result_preview || '(no result data)'}</pre>
+                        </div>
+                      </details>
                     ) : (
                       event.action
                     )}
                   </td>
-                  <td className="col-expand">
-                    {Object.keys(event.details).length > 0 && (
-                      <details className="event-details-inline">
-                        <summary className="details-icon">⋯</summary>
-                        <div className="details-popup">
-                          <pre>{JSON.stringify(event.details, null, 2)}</pre>
-                        </div>
-                      </details>
-                    )}
-                  </td>
+                  {/* Removed the expand column - tool_result events now have inline expansion */}
                   </tr>
                 );
               })}

@@ -450,13 +450,36 @@ def create_a2a_message_tool(target_port: int, target_name: str, from_name: str, 
                                     )
                                     # Record success metrics
                                     latency = time.time() - start_time
+                                    latency_ms = latency * 1000
                                     metrics.increment("a2a.messages.received", from_agent=from_name, to_agent=target_name, status="success")
                                     metrics.record_latency("a2a.roundtrip_time", latency, from_agent=from_name, to_agent=target_name)
                                     
-                                    logger.info(f"✓ A2A turn complete: {from_name} ← {target_name} ({latency*1000:.0f}ms)")
+                                    # Log the A2A receive for metrics dashboard
+                                    activity_logger.log_a2a_message(
+                                        direction="receive",
+                                        from_agent=target_name,
+                                        to_agent=from_name,
+                                        url=f"http://localhost:{target_port}/",
+                                        status_code=200,
+                                        latency_ms=latency_ms,
+                                        message_preview=text_response[:120] if text_response else None
+                                    )
+                                    
+                                    logger.info(f"✓ A2A turn complete: {from_name} ← {target_name} ({latency_ms:.0f}ms)")
                                     return text_response  # Return actual response
                     
-                    # No text in response - return metadata
+                    # No text in response - log as warning and return metadata
+                    latency = time.time() - start_time
+                    latency_ms = latency * 1000
+                    activity_logger.log_a2a_message(
+                        direction="receive",
+                        from_agent=target_name,
+                        to_agent=from_name,
+                        url=f"http://localhost:{target_port}/",
+                        status_code=200,
+                        latency_ms=latency_ms,
+                        message_preview="(no text in response)"
+                    )
                     logger.warning(f"A2A response from {target_name} had no text")
                     return f"{target_name} responded but sent no message. Check recall_my_protocols()."
                 
@@ -850,6 +873,9 @@ async def listen_to_npl_notifications(config: NPLConfig, party_name: str):
                                     # Extract protocol ID from refId field
                                     protocol_id = data.get("notification", {}).get("refId") or data.get("protocolId", "unknown")
                                     
+                                    # Map party_name to agent name for metrics
+                                    target_agent = f"{party_name}_agent" if party_name in ["buyer", "supplier"] else party_name
+                                    
                                     activity_logger.log_event(
                                         "npl_notification",
                                         "npl_engine",
@@ -857,6 +883,7 @@ async def listen_to_npl_notifications(config: NPLConfig, party_name: str):
                                         {
                                             "notification": notification_name,
                                             "protocol_id": protocol_id,
+                                            "target_agent": target_agent,
                                             "data": data
                                         }
                                     )

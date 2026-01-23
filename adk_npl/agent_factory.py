@@ -31,7 +31,7 @@ from .config import NPLConfig
 from .auth import KeycloakAuth
 from .client import NPLClient
 from .tools import NPLToolGenerator
-from .protocol_memory import NPLProtocolMemory, create_memory_tools
+from .protocol_memory import NPLProtocolMemory
 from .agent_logic import GLOBAL_AGENT_RULES
 from .docstring_trimmer import trim_tool_docstrings
 from .monitoring import get_metrics
@@ -431,13 +431,15 @@ class EnterpriseAgentFactory:
             f"validation={enable_runtime_validation}"
         )
         
-        # Create protocol memory for this agent
-        protocol_memory = NPLProtocolMemory(agent_id=agent_id)
+        # Get protocol memory singleton for this agent
+        # IMPORTANT: Use get_instance() to ensure all components share the same memory
+        protocol_memory = NPLProtocolMemory.get_instance(agent_id)
         
         # Create tool generator with Smart NPL Bridge
         tool_generator = NPLToolGenerator(
             npl_client=self._npl_client,
-            protocol_memory=protocol_memory
+            protocol_memory=protocol_memory,
+            agent_id=agent_id  # Pass agent_id for proper memory scoping
         )
         
         # Generate NPL tools from Smart NPL Bridge
@@ -455,11 +457,9 @@ class EnterpriseAgentFactory:
             )
             logger.info(f"Applied runtime party role validation to NPL tools")
         
-        # Add memory tools
-        memory_tools = create_memory_tools(agent_id=agent_id)
-        
+        # Memory tools are already included in npl_tools (added by NPLToolGenerator.generate_tools)
         # Combine all tools
-        all_tools = npl_tools + memory_tools
+        all_tools = npl_tools
         if additional_tools:
             all_tools.extend(additional_tools)
         
@@ -506,7 +506,7 @@ class EnterpriseAgentFactory:
         
         # Create tool call limiting callbacks with per-request reset
         # The counter is stored in a dict so it can be reset from outside (e.g., chat_api)
-        tool_call_counter = {"count": 0, "max": max_tool_calls_per_turn}
+        tool_call_counter = {"count": 0, "max": max_tool_calls_per_turn, "tool_timestamps": {}, "already_logged": False}
         
         def reset_tool_counter():
             """Reset the tool call counter for a new turn/request."""
@@ -514,6 +514,7 @@ class EnterpriseAgentFactory:
             tool_call_counter["count"] = 0
             tool_call_counter["recalled"] = False  # Reset orientation flag for new turn
             tool_call_counter["last_tool"] = None  # Reset duplicate call tracking
+            tool_call_counter["tool_timestamps"] = {}  # Reset parallel call tracking
             if prev > tool_call_counter["max"]:
                 logger.info(f"🔄 {agent_id} counter reset: was blocked at {prev}, can now resume")
         
@@ -530,30 +531,69 @@ class EnterpriseAgentFactory:
             max_calls = tool_call_counter["max"]
             
             tool_name = getattr(tool, 'name', 'unknown')
+            current_time = time.time()
             logger.info(f"🔧 [{agent_id}] Tool #{count}/{max_calls}: {tool_name}")
             
-            # 🚫 PREVENT DUPLICATE SEQUENTIAL CALLS: Block if calling the same tool twice in a row
-            last_tool = tool_call_counter.get("last_tool")
-            if last_tool == tool_name and tool_name in ['recall_my_protocols', 'recall_partner_identity']:
-                logger.warning(f"⚠️ Agent {agent_id} trying to call {tool_name} twice in a row")
-                metrics.increment("agent.duplicate_calls.blocked", agent=agent_id, tool=tool_name)
-                return {
-                    "error": (
-                        f"🛑 DUPLICATE CALL BLOCKED: You just called `{tool_name}()` and got a result. "
-                        f"Don't call it again immediately - use the result you already received. "
-                        f"\n\n"
-                        f"**Next step:** Review the result from your previous call and take appropriate action."
-                    )
-                }
-            tool_call_counter["last_tool"] = tool_name
+            # 🚫 PREVENT PARALLEL/DUPLICATE CALLS: Block if same tool called within 500ms
+            # This catches both sequential duplicates AND parallel batched calls from LLM
+            tool_timestamps = tool_call_counter.get("tool_timestamps", {})
+            last_call_time = tool_timestamps.get(tool_name, 0)
+            time_since_last = (current_time - last_call_time) * 1000  # Convert to ms
             
-            # Log tool call with args for comprehensive tracking
-            activity_logger.log_tool_call(
-                actor=agent_id,
-                tool_name=tool_name,
-                args=args if isinstance(args, dict) else {"raw": str(args)[:200]},
-                success=True  # Will be updated in after_tool_callback if it fails
-            )
+            # Tools that should never be called twice in quick succession
+            dedup_tools = [
+                'recall_my_protocols', 'recall_partner_identity', 
+                'list_products', 'list_shopping_items',
+                'remember_partner_identity', 'remember_protocol'
+            ]
+            
+            # Also deduplicate _create and _get calls
+            is_create_call = '_create' in tool_name
+            is_get_call = '_get' in tool_name and not '_next_actions' in tool_name
+            
+            should_dedupe = tool_name in dedup_tools or is_create_call or is_get_call
+            
+            if should_dedupe and time_since_last < 500:  # Within 500ms = likely parallel/duplicate
+                logger.warning(f"⚠️ Agent {agent_id} parallel/duplicate call to {tool_name} blocked ({time_since_last:.0f}ms since last)")
+                metrics.increment("agent.parallel_calls.blocked", agent=agent_id, tool=tool_name)
+                
+                # Log blocked call to activity feed and mark as already logged
+                block_msg = f"Duplicate call blocked ({time_since_last:.0f}ms since last)"
+                activity_logger.log_tool_call_complete(
+                    actor=agent_id,
+                    tool_name=tool_name,
+                    args=args if isinstance(args, dict) else {"raw": str(args)[:200]},
+                    result={"blocked": True, "reason": block_msg},
+                    latency_ms=time_since_last,
+                    success=False
+                )
+                # Mark that we already logged this call (for after_tool_callback to check)
+                tool_call_counter["already_logged"] = True
+                
+                if is_create_call:
+                    return {
+                        "error": (
+                            f"🛑 DUPLICATE CREATE BLOCKED: `{tool_name}()` was just called. "
+                            f"Wait for the result - don't call the same tool multiple times in parallel. "
+                            f"Check your previous tool result for the UUID of the created instance."
+                        )
+                    }
+                else:
+                    return {
+                        "error": (
+                            f"🛑 DUPLICATE CALL BLOCKED: `{tool_name}()` was just called ({time_since_last:.0f}ms ago). "
+                            f"Don't call the same tool multiple times in parallel - wait for and use the result. "
+                            f"Each tool call costs time and resources."
+                        )
+                    }
+            
+            # Record this call's timestamp
+            tool_call_counter["tool_timestamps"][tool_name] = current_time
+            tool_call_counter["last_tool"] = tool_name
+            tool_call_counter["last_args"] = args if isinstance(args, dict) else {"raw": str(args)[:200]}
+            
+            # Note: We log the complete tool call (with result) in after_tool_callback
+            # This avoids duplicate rows in the Activity Feed
             
             # Record metric for tool call start
             metrics.increment("agent.tool_calls.started", agent=agent_id, tool=tool_name)
@@ -607,15 +647,24 @@ class EnterpriseAgentFactory:
             
             return None  # Allow tool call
         
-        def after_tool_callback(tool, args, tool_context=None, result=None, **kwargs):
-            """Log tool results and record metrics."""
+        def after_tool_callback(tool, args, tool_context=None, tool_response=None, **kwargs):
+            """Log tool results and record metrics.
+            
+            ADK passes the actual tool return value as 'tool_response' parameter.
+            """
             import time
             from .activity_logger import get_activity_logger
             from .protocol_memory import auto_track_result
             metrics = get_metrics()
+            
+            # ADK passes the result as 'tool_response' - use that, or check kwargs for 'result'
+            result = tool_response if tool_response is not None else kwargs.get('result')
             activity_logger = get_activity_logger()
             
             tool_name = getattr(tool, 'name', 'unknown')
+            
+            # Debug: confirm we're receiving results from ADK
+            logger.debug(f"🔍 after_tool_callback for {tool_name}: tool_response={type(tool_response).__name__}, result={type(result).__name__}, kwargs_keys={list(kwargs.keys())}")
             
             # Record latency
             start_time = tool_call_counter.get("start_time", time.time())
@@ -643,18 +692,42 @@ class EnterpriseAgentFactory:
                         protocol_type = parts[2]  # e.g., "PurchaseOrder", "Offer"
                         # Get protocol memory for this agent
                         memory = NPLProtocolMemory.get_instance(agent_id)
-                        # Auto-track if result has protocol data
-                        auto_track_result(memory, protocol_type, result, role="owner")
-                        logger.debug(f"📝 Auto-tracked {protocol_type} from {tool_name}")
+                        
+                        # Check if result has trackable data
+                        instance_id = result.get("@id") or result.get("id")
+                        if instance_id:
+                            # Auto-track if result has protocol data
+                            auto_track_result(memory, protocol_type, result, role="owner")
+                            logger.info(f"📝 [{agent_id}] Auto-tracked {protocol_type} {instance_id[:8]}... in memory")
+                        else:
+                            logger.warning(f"⚠️ [{agent_id}] Result from {tool_name} has no @id: {str(result)[:100]}")
                 except Exception as e:
                     # Don't fail the callback if tracking fails
-                    logger.debug(f"Protocol auto-tracking failed: {e}")
+                    logger.warning(f"⚠️ [{agent_id}] Protocol auto-tracking failed: {e}")
             
             # Log completion with result preview
             result_preview = None
             if result:
                 result_str = str(result)
                 result_preview = result_str[:200] if len(result_str) > 200 else result_str
+            
+            # Check if this call was already logged (e.g., blocked calls)
+            if tool_call_counter.get("already_logged"):
+                # Reset flag and skip duplicate logging
+                tool_call_counter["already_logged"] = False
+                logger.debug(f"Skipping duplicate log for {tool_name} (already logged as blocked)")
+            else:
+                # Log complete tool call (with args and result) to activity logger for UI display
+                # Args were stored in before_tool_callback
+                tool_args = tool_call_counter.get("last_args", {})
+                activity_logger.log_tool_call_complete(
+                    actor=agent_id,
+                    tool_name=tool_name,
+                    args=tool_args,
+                    result=result,
+                    latency_ms=latency * 1000,
+                    success=not is_error
+                )
             
             logger.info(f"✅ [{agent_id}] Tool completed: {tool_name} ({latency*1000:.0f}ms){' ⚠️ ERROR' if is_error else ''}")
             if is_error:

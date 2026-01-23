@@ -362,7 +362,6 @@ export default function ApprovalDashboard() {
             <div className="agent-empty">
               <div className="agent-emptyTitle">All clear</div>
               <div className="agent-emptyBody">No purchase orders currently require approval.</div>
-              <button className="agent-btn agent-btn--secondary" onClick={loadOrders}>Refresh</button>
             </div>
           ) : (
             <div className="agent-grid">
@@ -391,7 +390,6 @@ export default function ApprovalDashboard() {
                   </div>
 
                   <div className="agent-cardFooter">
-                    <button className="agent-btn agent-btn--ghost" onClick={loadOrders}>Refresh</button>
                     <button className="agent-btn agent-btn--primary" onClick={() => handleApprove(order['@id']!)}>
                       Approve
                     </button>

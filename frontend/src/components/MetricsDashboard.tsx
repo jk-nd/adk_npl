@@ -85,7 +85,7 @@ export function MetricsDashboard() {
   const [autoRefresh, setAutoRefresh] = useState(true);
 
   // Fetch metrics
-  const { data: metrics, refetch } = useQuery<MetricsSummary>({
+  const { data: metrics } = useQuery<MetricsSummary>({
     queryKey: ['metrics', 'summary'],
     queryFn: async () => {
       const response = await fetch(`${ACTIVITY_API_URL}/api/metrics`);
@@ -130,9 +130,6 @@ export function MetricsDashboard() {
             />
             <span>Auto-refresh</span>
           </label>
-          <button className="refresh-btn" onClick={() => refetch()} title="Refresh">
-            ↻
-          </button>
         </div>
       </div>
 

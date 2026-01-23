@@ -170,17 +170,26 @@ def _build_custom_instructions(
         instructions.append(f"**Your Capacity:** {capacity}")
     
     if inventory:
+        # Include actual inventory data so agent doesn't need to call list_products()
+        products = inventory.get("products", [])
+        product_list = []
+        for p in products:
+            product_list.append(
+                f"  - {p.get('name', 'Unknown')}: ${p.get('unit_price', 0):,.2f}, "
+                f"{p.get('quantity_available', 0)} in stock"
+            )
+        product_summary = "\n".join(product_list) if product_list else "  (no products)"
+        
         instructions.append(
-            """
-**📦 INVENTORY AVAILABLE:**
-Use `list_products()` to see what you can sell.
+            f"""
+**📦 YOUR INVENTORY (already loaded - no need to call list_products):**
+{product_summary}
 
 **⚠️ CRITICAL - Avoid Duplicates:**
-1. Check inventory ONLY when starting a new sales cycle
-2. Check `recall_my_protocols()` to see active workflows
+1. You already know your inventory (above) - don't call list_products() repeatedly
+2. Check `recall_my_protocols()` to see active workflows FIRST
 3. Don't create duplicate workflows for items already being sold
-4. Wait for active workflows to complete before creating new ones
-5. Focus on progressing existing protocols through their lifecycle
+4. Focus on progressing existing protocols through their lifecycle
 """
         )
     
@@ -189,13 +198,13 @@ Use `list_products()` to see what you can sell.
 **⚡ WORKFLOW:**
 1. **recall_my_protocols()** → Check active workflows (ALWAYS FIRST!)
 2. If protocols exist → progress them through their lifecycle, DON'T create new ones
-3. If nothing active → **list_products()** → check what you can sell
+3. If nothing active → review your inventory above and start workflows
 4. For new products only → start appropriate workflows using available tools
 5. **One tool call per turn** → check result, then decide next step
 
 **IMPORTANT:**
 - Protocol memory shows workflows IN PROGRESS (updated in real-time)
-- Inventory shows TOTAL capacity (updated slowly, only when complete)
+- Your inventory is shown above (no need to call list_products repeatedly)
 - **Never create duplicate workflows for items already being processed**
 """
     )

@@ -596,3 +596,138 @@
   word-break: break-word;
   font-style: italic;
 }
+
+/* Tool Result Styles */
+.icon-tool-result {
+  background-color: #10b981 !important;
+  color: white !important;
+}
+
+.tool-result-details {
+  display: inline;
+}
+
+.tool-result-summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  cursor: pointer;
+  list-style: none;
+}
+
+.tool-result-summary::-webkit-details-marker {
+  display: none;
+}
+
+.tool-result-summary::before {
+  content: '▶';
+  font-size: 0.625rem;
+  color: var(--color-text-muted);
+  transition: transform 0.15s;
+  flex-shrink: 0;
+}
+
+.tool-result-details[open] .tool-result-summary::before {
+  transform: rotate(90deg);
+}
+
+.tool-status {
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+
+.tool-status.success {
+  color: #10b981;
+}
+
+.tool-status.error {
+  color: #ef4444;
+}
+
+.tool-latency {
+  font-size: 0.75rem;
+  color: #64748b;
+  background: #1e293b;
+  padding: 0.1rem 0.35rem;
+  border-radius: 3px;
+}
+
+.tool-protocol-id {
+  font-size: 0.7rem;
+  color: #8b5cf6;
+  background: rgba(139, 92, 246, 0.15);
+  padding: 0.1rem 0.35rem;
+  border-radius: 3px;
+  font-family: 'Monaco', 'Menlo', monospace;
+}
+
+.tool-state {
+  font-size: 0.7rem;
+  color: #06b6d4;
+  background: rgba(6, 182, 212, 0.15);
+  padding: 0.1rem 0.35rem;
+  border-radius: 3px;
+}
+
+.tool-count {
+  font-size: 0.7rem;
+  color: #f59e0b;
+  background: rgba(245, 158, 11, 0.15);
+  padding: 0.1rem 0.35rem;
+  border-radius: 3px;
+}
+
+.tool-error {
+  font-size: 0.7rem;
+  color: #ef4444;
+  background: rgba(239, 68, 68, 0.15);
+  padding: 0.1rem 0.35rem;
+  border-radius: 3px;
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tool-result-body {
+  margin-top: 0.5rem;
+  padding: 0.75rem;
+  background-color: #1e293b;
+  border: 1px solid #334155;
+  border-left: 3px solid #10b981;
+  border-radius: 4px;
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+.tool-args {
+  margin-bottom: 0.5rem;
+  padding-bottom: 0.5rem;
+  border-bottom: 1px solid #334155;
+  font-size: 0.75rem;
+  color: #64748b;
+}
+
+.tool-args code {
+  color: #94a3b8;
+  background: #0f172a;
+  padding: 0.1rem 0.3rem;
+  border-radius: 3px;
+  font-family: 'Monaco', 'Menlo', monospace;
+}
+
+.tool-result-body pre {
+  margin: 0;
+  font-size: 0.75rem;
+  line-height: 1.4;
+  color: #94a3b8;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: 'Monaco', 'Menlo', monospace;
+}
+
+/* Tool call complete icon */
+.icon-tool-complete {
+  background-color: #10b981 !important;
+  color: white !important;
+}

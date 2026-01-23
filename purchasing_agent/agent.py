@@ -170,17 +170,27 @@ def _build_custom_instructions(
         instructions.append(f"**Your Budget:** ${budget:,.2f}")
     
     if shopping_list:
+        # Include actual shopping list data so agent doesn't need to call list_shopping_items()
+        needs = shopping_list.get("needs", [])
+        needs_list = []
+        for n in needs:
+            needs_list.append(
+                f"  - {n.get('item', 'Unknown')}: qty {n.get('desired_quantity', 0)}, "
+                f"budget ${n.get('max_budget_per_unit', 0):,.2f}/unit, "
+                f"priority: {n.get('priority', 'normal')}"
+            )
+        needs_summary = "\n".join(needs_list) if needs_list else "  (no items needed)"
+        
         instructions.append(
-            """
-**📋 SHOPPING LIST AVAILABLE:**
-Use `list_shopping_items()` to see what you need to purchase.
+            f"""
+**📋 YOUR SHOPPING LIST (already loaded - no need to call list_shopping_items):**
+{needs_summary}
 
 **⚠️ CRITICAL - Avoid Duplicates:**
-1. Check shopping list ONLY when starting a new procurement cycle
-2. Check `recall_my_protocols()` to see active workflows
+1. You already know your shopping needs (above) - don't call list_shopping_items() repeatedly
+2. Check `recall_my_protocols()` to see active workflows FIRST
 3. Calculate: needed_quantity - (in_progress_quantity) = remaining_to_order
 4. Only start new workflows if remaining_to_order > 0
-5. Wait for active workflows to complete before checking shopping list again
 """
         )
     
@@ -189,13 +199,13 @@ Use `list_shopping_items()` to see what you need to purchase.
 **⚡ WORKFLOW:**
 1. **recall_my_protocols()** → Check active workflows (ALWAYS FIRST!)
 2. If protocols exist → progress them through their lifecycle, DON'T create new ones
-3. If nothing in progress → **list_shopping_items()** → check what you need
+3. If nothing in progress → review your shopping list above and start workflows
 4. For new items only → start appropriate workflows using available tools
 5. **One tool call per turn** → check result, then decide next step
 
 **IMPORTANT:**
 - Protocol memory shows workflows IN PROGRESS (updated in real-time)
-- Shopping list shows TOTAL business need (updated slowly, only when complete)
+- Your shopping list is shown above (no need to call list_shopping_items repeatedly)
 - **Never create duplicate workflows for items already being processed**
 """
     )
